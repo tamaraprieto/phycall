@@ -1,0 +1,1836 @@
+---
+title: "Figures B-ALL scWGS"
+output: html_notebook
+---
+
+```{r}
+library(data.table)
+library(dplyr)
+library(ggdist)
+library(ggplot2)
+library(ggpubr)
+library(tidyverse)
+library(readxl)
+library(ggtree)
+library(treeio)
+library(forcats)
+library(NbClust)
+library(ggfortify)
+library(circlize)
+library(dendextend)
+library(ComplexHeatmap)
+library(ggtree)
+library(deconstructSigs)
+library(arules)
+library(ape)
+library(Quartet)
+
+input_dir="../source_data/"
+fig_dir="../figures/"
+
+```
+
+
+
+# Fig. S6B
+
+```{r}
+
+# TRUE TREE
+offset_time <- "10" #representation issues
+first_expansions <- "32"
+mytree <- ape::read.tree(text = paste0("(Invitro_A1:",offset_time,",Invitro_A2:",offset_time,",
+    (Invitro_B1:34,Invitro_B2:34,
+    (Invitro_C1:33,Invitro_C2:33):34,
+    ((Invitro_G1:24,Invitro_G2:24):33,
+    (Invitro_F1:24,Invitro_F2:24):33):34):",first_expansions,",
+    (Invitro_E1:34,Invitro_E2:34,
+    ((Invitro_D1:24,Invitro_D2:24):33,
+    (Invitro_H1:24,Invitro_H2:24):33):34):",first_expansions,")
+    ;"))
+ patient <- "Invitro"
+ mytree$tip.label <- gsub(paste0(patient,"_"),"",mytree$tip.label)
+# Add cluster information about clustering
+  groupInfo <- list(cluster1_=c("A1","A2"),
+                    cluster2_=c("B1","B2"),
+                    cluster3_=c("C1","C2"),
+                    cluster4_=c("D1","D2"),
+                    cluster5_=c("E1","E2"),
+                    cluster6_=c("F1","F2"),
+                    cluster7_=c("G1","G2"),
+                    cluster8_=c("H2","H1"))
+
+ # Some cell names are not in the plot
+ unassigned <- list(setdiff(mytree$tip.label,c(unlist(groupInfo))))
+ groupInfo[length(groupInfo)+1] <- unassigned
+ names(groupInfo) <- c(names(groupInfo)[1:(length(groupInfo)-1)],"unassigned")
+ finaltree <- ggtree::groupOTU(mytree, groupInfo)
+
+  mycols_mod <- c("#b3d4f1", "#b5c9af", "#86cb98", "#fea79f", "#b393ba", "#43b45f", "#84dc5d", "#f48eed","lightgrey")
+
+  treefigure <- ggtree(finaltree, layout = "slanted") +
+                   theme_tree() +
+                   geom_rootedge(3) +
+                   geom_tippoint(size=7, aes(color=group)) +
+                   geom_tiplab(size=3, hjust = +0.7, fontface = "bold") +
+                   geom_nodelab(size=3, hjust = 1.3, vjust=1.3,col="forestgreen") +
+                   scale_color_manual(values = mycols_mod) +
+                   coord_cartesian(clip = 'off') +
+                   labs(col="Exome clusters") +
+                   theme_tree2(plot.margin=margin(6, 20, 6, 6),
+                              #legend.position='right',
+                              legend.position='none',
+                              title = element_text(size=10, face = "bold")) +
+    labs(x="") +
+    ggtitle("") +
+    scale_x_continuous(breaks=c(as.numeric(first_expansions),
+                                as.numeric(first_expansions)+34,
+                                as.numeric(first_expansions)+34+33,
+                                as.numeric(first_expansions)+34+33+24),
+                       labels = c("Oct 3rd 2020","Nov 6th 2020","Dec 9th 2020","Jan 2nd 2021"))
+  
+
+ggsave(plot = treefigure, filename = paste(fig_dir,"/TrueTree.invitro.pdf",sep=""), dpi=300,height = 5, width = 6)
+
+```
+
+# Fig. 4A
+```{r }
+
+# ESTIMATED TREE 
+
+    outgroup <- "Bulk"
+    patient <- "Invitro"
+    tree_support <- ape::read.tree(paste0(input_dir, "CellPhy.",patient,".GT10+FO+E.nobulks.noCNVs.raxml.support"))
+    tree_support <- ape::root(tree_support, paste0(patient,"_",outgroup))
+    tree_support=ape::bind.tree(tree_support,ape::read.tree(text="(zeros:0);"))
+    tree_support <- ape::root(tree_support, "zeros")
+
+    # Load the tree with the genome mutations
+    tree_genome <- readRDS(file = paste0(input_dir, "TreeMutWithZeros.",patient,".genome.rds")) 
+    tree_genome@phylo <- ape::root(tree_genome@phylo, "zeros")
+    # Copy the bootstrap information from label to a new column
+    # This way I can rename the labels with the function makeNodeLabel
+    # which should be equivalent among trees after rooting to the same node
+    tree_support_annotation <- tree_support %>% tibble::as_tibble() %>%
+      dplyr::mutate(bootstrap=as.numeric(label)) %>% treeio::as.treedata()
+    tree_support_annotation@phylo <- ape::makeNodeLabel(tree_support_annotation@phylo, method = "number", prefix = "N")
+    # Add the bootstrap information to the tree_genome using the label
+    tree_genome_withbootstrap <- tree_genome %>% tibble::as_tibble() %>%
+      dplyr::full_join(tree_support_annotation %>% as_tibble() %>% dplyr::select(label,bootstrap), by=c("label")) %>%
+      treeio::as.treedata()
+
+    tree_genome_withbootstrap <- treeio::drop.tip(tree_genome_withbootstrap, tip = "zeros")
+
+      tree_genome_withbootstrap@phylo$tip.label <- gsub("Invitro_","",tree_genome_withbootstrap@phylo$tip.label)
+      mytreemapped <- tree_genome_withbootstrap
+      mytreemapped@phylo$tip.label <- gsub(paste0(patient,"_"),"",mytreemapped@phylo$tip.label)
+      mytreemapped@phylo <- ape::drop.tip(phy = mytreemapped@phylo, tip = "Germline")
+
+# Add cluster information about clustering
+  groupInfo <- list(cluster1_=c("A1","A2"),
+                    cluster2_=c("B1","B2"),
+                    cluster3_=c("C1","C2"),
+                    cluster4_=c("D1","D2"),
+                    cluster5_=c("E1","E2"),
+                    cluster6_=c("F1","F2"),
+                    cluster7_=c("G1","G2"),
+                    cluster8_=c("H2","H1"))
+
+ # Some cell names are not in the plot
+ unassigned <- list(setdiff(mytreemapped@phylo$tip.label,c(unlist(groupInfo))))
+ groupInfo[length(groupInfo)+1] <- unassigned
+ names(groupInfo) <- c(names(groupInfo)[1:(length(groupInfo)-1)],"unassigned")
+ mytreemapped@phylo <- groupOTU(mytreemapped@phylo, groupInfo)
+
+  mycols_mod <- c("#b3d4f1", "#b5c9af","#86cb98", "#fea79f", "#b393ba", "#43b45f", "#84dc5d", "#f48eed",NA)
+    mytreemapped@phylo  <- groupOTU(mytreemapped@phylo, groupInfo)
+
+    left2right <- ggtree(mytreemapped) +
+                   theme_tree() +
+                   geom_rootedge(2000) +
+                   geom_tippoint(size=5, aes(color=group)) +
+                   geom_tiplab(size=2, hjust = + 0.6, fontface = "bold") +
+                   scale_color_manual(values = mycols_mod) +
+                   coord_cartesian(clip = 'off') +
+                   labs(col="Exome clusters") +
+                   scale_x_continuous(breaks=c(25000,50000,75000,100000,125000),labels=scales::comma_format(c(25000,50000,75000,100000,125000),trim = FALSE)) +
+                   theme_tree2(plot.margin=margin(6, 20, 6, 6),
+                              #legend.position='right',
+                              legend.position='none',
+                              title = element_text(size=10, face = "bold")) +
+    labs(x="Number of SNVs") +
+      geom_rootedge(50) +
+      # bootstrap annotations
+      geom_nodelab(aes(label=bootstrap, fontface = 'bold'),
+                   nudge_y = 0.2, # actually x axis
+                   nudge_x = -3000, size=1.8) +  # actually y axis
+      theme(legend.position = "none") +
+      labs(col="Bootstrap ")
+    left2right
+ggsave(plot = left2right, filename = paste(fig_dir,"/TreeUG.",patient,".pdf",sep=""), height = 3.5, width = 4.5)
+
+
+# Phylogenetic accuracy #
+
+# Create all possible ground truth trees
+#finaltree is the true tree with polytomies
+truetree_processed<- finaltree
+# https://rdrr.io/github/liamrevell/phytools/man/resolveNode.html
+All_possible_trees <- phytools::resolveAllNodes(truetree_processed)
+All_possible_trees
+All_possible_trees_unrooted <- lapply(All_possible_trees, ape::unroot)
+All_possible_trees <- ape::unique.multiPhylo(All_possible_trees_unrooted)
+length(All_possible_trees)
+# 3 possible trees for a polytomy of 3. 15 trees for a polytomy of 4
+# We multiply them to obtain all possible trees
+15*3*3
+
+PhylogeneticAccuracy <- function(n, estimatedtree=treeio::drop.tip(mytreemapped@phylo, tip = "Bulk"),
+allposibletruetrees=All_possible_trees){
+  truetree <- allposibletruetrees[[n]]
+  sq_status <- Quartet::QuartetStatus(truetree,estimatedtree)
+  quartet_out <- Quartet::SimilarityMetrics(sq_status)
+  similarity <- as.numeric(quartet_out[1,"QuartetDivergence"]*100)
+  return(quartet_sim=similarity)
+}
+tree_similarity <- sapply(1:length(c(All_possible_trees)),PhylogeneticAccuracy,allposibletruetrees=All_possible_trees)
+which(tree_similarity==100)
+# Create random trees (same size than All_possible_trees)
+myrtree<- function(x){rtree(n=length(finaltree$tip.label), tip.label = finaltree$tip.label)}
+random_trees <- lapply(1:length(c(All_possible_trees)),myrtree)
+tree_similarity_random <- sapply(1:length(c(random_trees)),PhylogeneticAccuracy, allposibletruetrees=random_trees)
+tree_similarity %>%
+  as.data.frame() %>%
+  dplyr::rename(sim=".") %>%
+  dplyr::mutate(mycol=ifelse(sim==100,"Most likely true tree","Other potential tree\ngiven the experimental design")) %>%
+  rbind(tree_similarity_random %>% as.data.frame() %>%
+  dplyr::rename(sim=".") %>% dplyr::mutate(mycol="Random tree")) %>%
+  ggplot(aes(x=sim, fill=mycol)) +
+    geom_dotplot(binwidth = 1.2, binpositions = "all") +
+  scale_fill_manual(values=c("mediumseagreen","lightblue","firebrick3")) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        axis.line.x.bottom = element_line(),
+        axis.ticks.x.bottom = element_line(),
+        ) +
+  guides(fill=guide_legend(nrow=3, byrow=TRUE)) +
+  labs(x="Quartet similarity between the reconstructed phylogeny\nand other potential and random trees",y="") +
+  scale_y_continuous(NULL, breaks = NULL) +
+  scale_x_continuous(breaks = c(30,40,50,60,70,80,90,100)) +
+  labs(fill="")
+
+```
+
+# Fig. 4B
+
+```{r}
+
+# heatmap similarity #
+patient <- "Invitro"
+tree_noparental <- ape::drop.tip(mytreemapped@phylo, tip = c("A1","A2","Bulk"))
+non_parental_cells <- tree_noparental$tip.label
+all_distances <- castor::get_all_pairwise_distances(tree_noparental,
+                                                    only_clades = non_parental_cells,
+                                                    as_edge_counts = T)
+colnames(all_distances) <- non_parental_cells
+rownames(all_distances) <- non_parental_cells
+all_distances[c("B1","B2","C1","C2","G1","G2","F1","F2","E1","E2","D1","D2","H1","H2"),c("B1","B2","C1","C2","G1","G2","F1","F2","E1","E2","D1","D2","H1","H2")]
+all_distances %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("sample") %>%
+  dplyr::mutate(sample=factor(as.factor(sample), levels = c("B1","B2","C1","C2","G1","G2","F1","F2","E1","E2","D1","D2","H1","H2"))) %>%
+  tidyr::pivot_longer(cols=tree_noparental$tip.label) %>%
+  dplyr::mutate(name=factor(as.factor(name), levels = c("B1","B2","C1","C2","G1","G2","F1","F2","E1","E2","D1","D2","H1","H2"))) %>%
+  ggplot(aes(sample, name, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis_c(option = "mako", na.value = NA) +
+  labs(x="",y="",fill="Node distance") +
+  theme_classic() +
+  theme(legend.position = "bottom")
+
+ggsave(filename = paste(fig_dir,"/NodeDistance.",patient,".pdf",sep=""), dpi = 300, height = 5.2, width = 5)
+
+
+```
+
+
+
+# Fig. 4C
+
+```{r}
+
+# Correlation between sampling time and number of mutations after mapping
+sampling_time <- data.table::fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=347574396&single=true&output=tsv") %>%
+  dplyr::select(`Cell ID`,`Age (days)`) %>%
+  dplyr::rename(label=`Cell ID`,sampling_time=`Age (days)`)
+mycols_mod <- c("#b3d4f1", "#b5c9af", "#86cb98", "#fea79f", "#b393ba", "#43b45f", "#84dc5d", "#f48eed")
+distances_toroot <- castor::get_all_distances_to_root(mytreemapped@phylo)
+mytreemapped %>%
+  tibble::as.tibble() %>%
+  cbind(distances_toroot=as.integer(distances_toroot)) %>%
+  left_join(sampling_time) %>%
+  dplyr::mutate(group=ifelse(grepl("^N",label),NA,as.character(group))) %>%
+  dplyr::filter(!is.na(sampling_time)) %>%
+  ggplot(aes(sampling_time,y=distances_toroot)) +
+  geom_smooth(method = "lm", col="black", fill="lightgrey") +
+  geom_jitter(aes(col=group),size=4, alpha=0.8, width = 5) +
+  scale_color_manual(values = mycols_mod) +
+  scale_x_continuous(breaks=c(0,33+36,
+                               33+36+33,
+                              33+36+33+24),
+                       labels = c("0","66","99","123")) +
+  theme_light() +
+  theme(legend.position = "none") +
+  labs(x="Days of culture", y="Root-to-leaf branch length\n(in number of mutation)") +
+  ggpubr::stat_cor(method = "spearman", label.x = 2, label.y = 100000, cor.coef.name = "rho") +
+  scale_y_continuous(breaks=c(25000,50000,75000,100000,125000),labels=scales::comma_format(c(25000,50000,75000,100000,125000),trim = FALSE))
+ggsave(filename = paste(fig_dir,"/Tree.",patient,".timecorrelation.pdf",sep=""), dpi = 300, height = 4, width = 4)
+
+```
+
+# Fig. 4D
+```{r}
+
+coverage_threshold <- 15
+
+precision <- readRDS(paste0(input_dir, "linkedreads_variants_table_illumina.rds")) %>%  
+  dplyr::filter(reads>=coverage_threshold) %>%
+  dplyr::mutate(TPcount=ifelse(category=="TP", 1,0)) %>%
+  dplyr::mutate(FPcount=ifelse(category=="FP", 1,0)) %>%
+  dplyr::group_by(branch) %>%
+  dplyr::mutate(TPtotal=sum(TPcount)) %>%
+  dplyr::mutate(FPtotal=sum(FPcount)) %>%
+  dplyr::mutate(precision=1-(FPtotal/(TPtotal+TPtotal))) %>%
+  dplyr::select(branch, TPtotal,FPtotal,precision) %>%
+  unique() %>%
+  dplyr::rename(Cell=branch) %>%
+  dplyr::mutate(Cell=gsub("Invitro_","",Cell)) %>%
+  dplyr::filter(precision>0)
+mean(precision$precision)*100
+sd(precision$precision)*100 
+ 
+
+recall <- readRDS(paste0(input_dir,"recall_invitro_illumina.rds"))
+
+
+table_precisionrecall <- dplyr::full_join(recall, precision,by="Cell") %>%
+  dplyr::filter(!is.na(precision))%>%
+  dplyr::mutate(F1=2*(precision*recall/(precision+recall))) %>%
+  mutate(Cell = forcats::fct_reorder(as.factor(Cell),as.numeric(precision)))
+  
+mean(table_precisionrecall$recall)*100
+sd(table_precisionrecall$recall)*100
+
+  
+table_precisionrecall %>%  
+  tidyr::pivot_longer(cols=c("precision","recall","F1")) %>%
+  dplyr::filter(name!="F1") %>%
+  ggplot(aes(Cell, value, fill=name)) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0,1)) +
+  geom_col() +
+  scale_fill_manual(values = c("lightsalmon","palegoldenrod","pink")) +
+  labs(x="",y="", fill="") +
+  theme_pubclean() +
+  theme(legend.position = "none") + 
+  facet_grid(name ~ .)
+
+  ggsave(filename = paste(fig_dir,"/F1.invitro.pdf",sep=""), height = 5, width = 7)
+
+```
+
+# Fig. 4E
+```{r}
+
+# get directory
+patient <- "Invitro"
+mutation_context_info <- fread(file=paste0(input_dir, "MutationalContext.",patient,".txt"), header = F, col.names = c("chrompos","Pattern"))
+
+dim(mutation_context_info)
+
+branch_mapping_info <- read.table(file=paste0(input_dir,"VariantSitesCellPhyAfterMutationMapping.genome.",patient,".bed"), sep = "\t", col.names = c("chr","start","pos","branch")) %>%
+  dplyr::mutate(chrompos=paste0(chr,":",pos)) 
+
+
+dim(branch_mapping_info)
+
+# Edit the branching info to obtain external and internal or clones #
+
+ branch_mapping_info <- branch_mapping_info %>%
+              dplyr::mutate(Sample=gsub(paste0(patient,"_",sep=""),"",branch)) %>%
+              dplyr::rowwise() %>%
+              dplyr::mutate(newbranch=ifelse(nchar(Sample)<=3,grep(paste0(Sample,"$"),finaltree$tip.label),NA)) %>%
+              dplyr::rowwise() %>%
+              dplyr::mutate(after=length(finaltree$tip.label)-newbranch) %>%
+              dplyr::mutate(before=newbranch-1) %>%
+              dplyr::mutate(newbranch=ifelse(nchar(Sample)<=3,
+                                                  paste(c(rep("0",times=before),"1",rep("0",times=after)),collapse=""),
+                                                  Sample)) %>%
+              # separate branch string
+              tidyr::separate(newbranch, into=c(c("remove",finaltree$tip.label),"zeros"), sep="") %>%
+              dplyr::select(-zeros,-remove,-after,-before) %>%
+              # replace value 1 by column name
+              purrr::imap_dfr( ~replace(.x, .x==1, .y)) %>%
+              purrr::imap_dfr( ~replace(.x, .x==0, "")) %>%
+              tidyr::unite(col="branch_name", finaltree$tip.label, sep="") %>%
+   dplyr::mutate(branch2=ifelse(nchar(branch_name)<=3,"external","internal")) %>%
+   dplyr::rename(branch_original=branch) %>%
+   dplyr::rename(branch=branch2)
+
+
+# Merge context and mapping branch for each variant & create the spectrum counts #
+
+myspectrum <- dplyr::full_join(mutation_context_info,branch_mapping_info) %>%
+  # Remove mutation in the bulk
+  dplyr::filter(branch_original!="Invitro_Bulk") %>%
+  # Remove mutations in chrX and chrY just in case
+  dplyr::filter(!(chr %in% c("chrX","chrY"))) %>%
+  dplyr::mutate(count=1) %>%
+  dplyr::group_by(branch,Pattern) %>%
+  dplyr::filter(Pattern!=">") %>%
+  dplyr::summarise(number_variants=sum(count)) %>%
+  tidyr::pivot_wider(names_from = branch, values_from=number_variants, values_fill = 0)
+
+# get the input in deconstructSigs format
+library(deconstructSigs)
+my_spectrum <- myspectrum %>%
+  # Change into deconstructSigs format
+  dplyr::mutate(Pattern=paste0(substr(Pattern, 1,1),"[",substr(Pattern, 2,4),"]",substr(Pattern, 5,5))) %>%
+  # Make sure the order of levels is the same
+  # get the levels from the example dataset
+  dplyr::mutate(Pattern=factor(as.character(Pattern),levels = colnames(randomly.generated.tumors)))
+
+
+  # Transform column into rownames
+  names_rows <- my_spectrum$Pattern
+  my_spectrum<- data.matrix(my_spectrum)
+  rownames(my_spectrum) <- names_rows
+  my_spectrum <-my_spectrum[,-1]
+my_spectrum_deconstructSigs <- my_spectrum
+table_abs_counts_SNVs <- my_spectrum_deconstructSigs %>%
+ as.data.frame() %>%
+ tidyr::pivot_longer(cols = everything(), names_to="Sample", values_to="num") %>%
+ group_by(Sample) %>%
+ mutate(NumSNVs=sum(num)) %>%
+ dplyr::select(Sample,NumSNVs) %>%
+ unique() %>%
+ dplyr::mutate(Sample=gsub("-",".",Sample)) # Necessary to do the same modification of the names that is doing the following melt
+input_deconstructSigs <- as.data.frame(t(my_spectrum_deconstructSigs))
+# Create a signature refs with more recent data
+RunDeconstructSigsPerSample <- function(n){
+     SignaturesDeconstructSigs = whichSignatures(tumor.ref = input_deconstructSigs,
+                       signatures.limit=100,
+                       signature.cutoff = 0,
+                       signatures.ref = signatures.cosmic,
+                       sample.id = rownames(input_deconstructSigs)[n],
+                       contexts.needed = TRUE,
+                       tri.counts.method="genome")
+     return(SignaturesDeconstructSigs$weights)
+}
+deconstructSigs_combined <- do.call("rbind",lapply(1:nrow(input_deconstructSigs),
+                                                   FUN = RunDeconstructSigsPerSample))
+deconstructSigs_combined_melted <- deconstructSigs_combined %>%
+  tibble::rownames_to_column("Sample") %>%
+  tidyr::pivot_longer(cols = colnames(deconstructSigs_combined)[grepl("(Signature|SBS)",colnames(deconstructSigs_combined))],
+                names_to = "Signature") %>%
+  dplyr::mutate(Signature = gsub("Signature.","SBS",Signature)) %>%
+  dplyr::left_join(table_abs_counts_SNVs) %>%
+  dplyr::mutate(presabs=ifelse(value>0,1,0)) %>%
+  dplyr::group_by(Signature) %>%
+    dplyr::mutate(presmorethan1cell=sum(presabs)) %>%
+  dplyr::filter(value>0) %>%
+  dplyr::mutate(Sample=gsub("\\.$","",gsub(".*_","",Sample)))
+
+# create plot
+persample_contribution_deconstructsigs <- deconstructSigs_combined_melted  %>%
+    dplyr::mutate(value2=as.numeric(value)*as.numeric(NumSNVs)) %>%
+  dplyr::group_by(Signature) %>%
+  dplyr::mutate(tot_sig=sum(value2, na.rm = T)) %>%
+  dplyr::mutate(prop=tot_sig/dplyr::n()) %>%
+  dplyr::ungroup()  %>%
+  dplyr::mutate(tot_SNVs=sum(value2, na.rm = T)) %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(sum(unique(deconstructSigs_combined_melted$NumSNVs))) %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(Signature=ifelse(tot_sig/tot_SNVs < 0.01, "Other (<1%\nmutations)",as.character(Signature)))
+# SORT signatures
+signature_invitro <- c("SBS1","SBS5","SBS6","SBS14","SBS15","SBS20","SBS21","SBS26","SBS44")
+persample_contribution_deconstructsigs$Signature <- factor(as.factor(persample_contribution_deconstructsigs$Signature), levels=c(signature_invitro, setdiff(setdiff(persample_contribution_deconstructsigs$Signature,"Other (<1%\nmutations)"),signature_invitro),"Other (<1%\nmutations)"))
+# I can divide the palette until 12
+mycolors <- colorRampPalette(brewer.pal(9, "Paired"))(length(levels(persample_contribution_deconstructsigs$Signature)))
+persample_contribution_deconstructsigs %>%
+  dplyr::mutate(Sample=gsub("internal$","Internal phylogenetic branch\n(mutations shared among cells)",gsub("external","External phylogenetic branch\n(single-cell unique mutations)", Sample))) %>%
+  ggplot(aes(x=as.character(Sample), y=value, fill=as.factor(Signature))) +
+  geom_col(color=NA) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 10), legend.position = "bottom") +
+  scale_fill_manual(values = mycolors) +
+  labs(y="Signature contribution",x="",fill="Signature") +
+  coord_flip() +
+  scale_y_continuous(breaks = c(0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0))
+ggsave(paste(fig_dir,"Signatures.DeconstructSigs.Cosmicv3.Invitro.pdf",sep=""), dpi = 300, width = 6, height = 3)
+```
+
+# Fig. 4F
+
+```{r}
+
+window_percell <- t(fread(paste0(input_dir,"region_1_chr13_5k_imbalance.csv"))) # 
+
+# Rename the columns of the files
+colnames(window_percell) <- c("A1","A2","B1","B2","C1","C2","D1","D2","E1","E2","F1","F2","G1","G2","H1","H2")
+rownames(window_percell) <- seq(from=40000000, by=5000, length.out=nrow(window_percell)) # change accordingly to start and end coordinates under generate_chr13_mirrored_baf.py
+window_percell2 <- window_percell
+# remove rows which have 6 cells or more cells with missing data
+window_percell2 <- window_percell2[rowSums(is.na(window_percell))<6,]
+data_to_plot <- window_percell2 %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("interval") %>%
+  tibble::rowid_to_column("newid") %>%
+  tidyr::pivot_longer(cols = colnames(window_percell), names_to="cell",values_to="mirrored BAF") %>%
+  dplyr::filter(!grepl("A",cell)) %>%
+  dplyr::mutate(cell=gsub("Bulk","Single-cell\ncolony",cell)) %>%
+  dplyr::mutate(cell=factor(as.factor(cell), levels =   c("C1","C2","B1","B2","G1","G2","F1","F2","E1","E2","H2","H1","D1","D2","Single-cell\ncolony"))) %>%
+  dplyr::mutate(clone=ifelse(cell %in% c("E2","E1","H1","H2","D1","D2"), "Pink clone", ifelse(cell=="Single-cell\ncolony","Single-cell\ncolony","Green clone"))) %>%
+  dplyr::mutate(clone=factor(as.factor(clone), levels = c("Pink clone","Green clone","Single-cell\ncolony")))
+  mycols_mod <- c(rep(c("#86cb98", "#b5c9af", "#84dc5d", "#43b45f","#b393ba", "#f48eed","#fea79f"), each=2),"lightblue")
+
+data_to_plot %>%
+  dplyr::filter(as.numeric(interval)>41400000 & as.numeric(interval)<42900000) %>%
+  ggplot(aes(as.numeric(newid), `mirrored BAF`)) +
+  geom_line(aes(col=cell, group=cell)) +
+  theme_classic() +
+  scale_color_manual(values = c(mycols_mod)) +
+  labs(col="",y="Mirrored BAF") +
+  ggnewscale::new_scale_color() +
+  geom_vline(xintercept = c(168,242), linetype=2) +
+  labs(x="5kb bins at chr13.q14.11", col="", fill="") +
+  theme(legend.position = "top")
+
+ggsave(paste0(fig_dir,"MirroredBAF.invitro.chr13.pdf"), dpi = 300, height = 5, width = 8)
+```
+
+
+# Fig 5B
+
+```{r number of mutations per branch}
+
+
+patient <- "417"
+patient <- "4295"
+patient <- "445"
+patient <- "4084"
+
+NumberMutationsTree <- function (patient){
+  
+  suffix=".genome"
+
+    tree_distance <- readRDS(file = paste0(input_dir, "/TreeMutWithZeros.",patient,".genome.RESCALE.avg.precision.rds"))
+
+  tree_distance@phylo$edge.length
+  tree_distance <- treeio::drop.tip(tree_distance,"zeros")
+  
+
+  tree_plot_new <- ggtree(tree_distance) +
+      geom_tiplab(size=3) +
+      geom_label(aes(x=branch, label=mutList2), size=2, hjust=0) +
+      theme_tree2() 
+ 
+tree_plot_new
+
+ dist_root <- castor::get_all_distances_to_root(tree_distance@phylo)[1:length(tree_distance@phylo$tip.label)]
+ 
+  mytable <- cbind.data.frame(cell_name=tree_distance@phylo$tip.label,num_mut_root=as.numeric(dist_root)) %>%
+   dplyr::mutate(type=ifelse(cell_name %in% c(
+     "4295_D9","4295_C5", "4295_A11",
+     "417_B10","417_D9","417_A2", "417_C5","417_B5",
+     "445_A3","445_E12","445_G9", "445_D8", "445_H4", "445_F4"
+   ),"Healthy/Premalignant","Tumor")) %>%
+    left_join( tree_distance %>%
+                 as_tibble() %>%
+                 dplyr::select(label,expected_edge_length) %>%
+                 dplyr::rename(terminal_edge_length=expected_edge_length) %>%
+                 dplyr::rename(cell_name=label)) %>%
+   left_join(readRDS(file = paste0(input_dir , "BCR.rds")) %>%
+
+   dplyr::select(Sample,aaSeqCDR3) %>%
+   dplyr::mutate(cell_name=Sample)) %>%
+   dplyr::mutate(bcr_status=ifelse(!is.na(aaSeqCDR3),"rearranged Ig","germline / not covered Ig"))
+   
+   return(mytable)
+}
+   
+a <- NumberMutationsTree("4295")
+b <- NumberMutationsTree("417")
+c <- NumberMutationsTree("445")
+d <- NumberMutationsTree("4084")
+
+
+combined_table <- rbind.data.frame(a,b,c,d) %>%
+  dplyr::mutate(Patient=gsub("_.*","",cell_name)) %>%
+  dplyr::mutate(type=factor(as.factor(type),levels=c("Healthy/Premalignant","Single-driver tumor","Tumor"))) %>%
+    dplyr::mutate(Patient=plyr::revalue(Patient, c("4295"="Patient A",
+                                                 "417"="Patient B",
+                                                 "445"="Patient C",
+                                                 "4084"="Patient D")))
+  
+combined_table %>%
+  dplyr::group_by(Patient,type) %>%
+  dplyr::summarise(count=dplyr::n()) %>%
+  dplyr::ungroup()
+
+  combined_table %>%
+     ggplot(aes(x=type,y=num_mut_root)) +
+      geom_violin(outlier.shape = NA) +
+      geom_jitter(aes(col=type), size=1.5) +
+      labs(x="Cell phenotype",y="Branch length\n(in number of mutations)") +
+    scale_color_manual(values = c("palegreen3","plum3")) +
+  ggpubr::stat_compare_means(method = "kruskal", label = "p.signif", size=4, 
+                             col="grey", 
+                             label.y = 3000, 
+                             label.x=1.5) +
+  theme_classic2() +
+  theme(legend.position = "bottom", 
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()
+       ) +
+  facet_grid(. ~ Patient, scales = "free_x") +
+  labs(col="Cell",x="")
+  
+
+ggsave(file = paste(fig_dir,"NumberMutationsPerCell.pdf",sep=""), dpi = 300, height = 6, width =7)  
+
+```
+
+
+# Fig S6C
+
+```{r}
+
+
+coverage_threshold <- 15
+
+precision <- readRDS(paste0(input_dir, "linkedreads_variants_table_illumina.rds")) %>%  
+  dplyr::filter(reads>=coverage_threshold) %>%
+  dplyr::mutate(TPcount=ifelse(category=="TP", 1,0)) %>%
+  dplyr::mutate(FPcount=ifelse(category=="FP", 1,0)) %>%
+  dplyr::group_by(branch) %>%
+  dplyr::mutate(TPtotal=sum(TPcount)) %>%
+  dplyr::mutate(FPtotal=sum(FPcount)) %>%
+  dplyr::mutate(precision=1-(FPtotal/(TPtotal+TPtotal))) %>%
+  dplyr::select(branch, TPtotal,FPtotal,precision) %>%
+  unique() %>%
+  dplyr::rename(Cell=branch) %>%
+  dplyr::mutate(Cell=gsub("Invitro_","",Cell)) %>%
+  dplyr::filter(precision>0)
+mean(precision$precision)*100
+sd(precision$precision)*100 
+ 
+
+recall <- readRDS(paste0(input_dir,"recall_invitro_illumina.rds"))
+
+
+table_precisionrecall <- dplyr::full_join(recall, precision,by="Cell") %>%
+  dplyr::filter(!is.na(precision))%>%
+  dplyr::mutate(F1=2*(precision*recall/(precision+recall))) %>%
+  mutate(Cell = forcats::fct_reorder(as.factor(Cell),as.numeric(precision)))
+  
+mean(table_precisionrecall$recall)*100
+sd(table_precisionrecall$recall)*100
+
+table_precisionrecall %>%
+  dplyr::mutate(data="Phycall") %>%
+  dplyr::full_join(cbind(Cell=c("scan2-low","scan2-high","ptato-low","ptato-high"),
+                         precision=c(0.91,0.68,0.73,NA),
+                         recall=c(NA,0.46,0.45,0.69),
+                         data=c("Luquette\net al.(2022)","Luquette\net al.(2022)","Middlekamp\net al.(2023)","Middlekamp\net al.(2023)")) %>% 
+                     as.data.frame() %>%
+                     dplyr::mutate(precision=as.numeric(precision)) %>%
+                     dplyr::mutate(recall=as.numeric(recall))) %>%
+  tidyr::pivot_longer(cols=c("precision","recall","F1")) %>%
+  dplyr::filter(name!="F1") %>%
+  ggplot(aes(value, name)) +
+  geom_violin(aes(fill=name)) +
+  theme_ggdist() +
+  scale_color_manual(values = c("lightsalmon","palegoldenrod")) +
+  scale_fill_manual(values = c("lightsalmon","palegoldenrod")) +
+  labs(x="",y="", fill="") +
+  stat_summary(aes(group=name)) +
+  facet_grid(data ~ .,)
+
+  ggsave(filename = paste(fig_dir,"/F1.invitro.comparison.pdf",sep=""), height = 3, width = 5)
+  
+```
+
+# Fig 5E, Fig S6E-F
+
+```{r}
+
+
+      # Load annotation based on exome and CNV mutations
+    Healthy_info <- fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=0&single=true&output=csv") %>%
+      dplyr::select(Patient,Sample_tag,`Exome/CNV status`) %>%
+      dplyr::rename(cell_names=Sample_tag) %>%
+      dplyr::filter(`Exome/CNV status`=="Premalignant" | `Exome/CNV status`=="Uncertain") %>%
+      dplyr::rename(Geno=`Exome/CNV status`)
+  
+    # FACS information 
+    originalfacs_indexedcells <-  readRDS(file = paste0(input_dir ,"FACS_metadata.rds"))  %>% 
+      dplyr::left_join(Healthy_info) %>%
+      dplyr::mutate(`Geno`=ifelse(is.na(`Geno`),"Driver-carrier cell",gsub("Premalignant","Healthy/Premalignant",`Geno`)))
+ 
+    
+
+CreatePCA <- function(patient){
+  
+        Updated_FACS <- originalfacs_indexedcells %>%
+                    dplyr::filter(Patient==patient) #%>%
+        
+        if (patient=="4295"){
+          mypatient_name<- "Patient A"
+        } else if (patient=="417") {
+          mypatient_name <- "Patient B"
+        } else if (patient=="445") {
+          mypatient_name <- "Patient C"
+        } else if (patient=="4084") {
+          mypatient_name <- "Patient D"
+        }
+        
+          
+          tree_support <- ape::read.tree(file = paste0(input_dir,"CellPhy.",patient,".GT10+FO+E.nobulks.noCNVs.raxml.support"))
+
+          
+          tree_support$tip.label
+          Updated_FACS <- Updated_FACS %>%
+            dplyr::filter(cell_names %in% gsub(".*_","",tree_support$tip.label))
+        
+          all_phenotypes_markers <- as.matrix(Updated_FACS[,grepl("(CD)",colnames(Updated_FACS))])
+          all_phenotypes_markers <- matrix(as.numeric(all_phenotypes_markers),    # Convert to numeric matrix
+                                         ncol = ncol(all_phenotypes_markers))
+          colnames(all_phenotypes_markers) <- colnames(Updated_FACS)[grepl("(CD)",colnames(Updated_FACS))]
+          colnames(all_phenotypes_markers) <- gsub("-$","",colnames(all_phenotypes_markers))
+          rownames(all_phenotypes_markers) <-Updated_FACS$cell_names
+
+
+          col_fun = colorRamp2(c(0, median(all_phenotypes_markers),max(all_phenotypes_markers)), c("white" ,"lightblue","dodgerblue3"))
+          col_fun(seq(0, 3)) 
+          dend = as.dendrogram(hclust(dist(all_phenotypes_markers)))
+          dend = dendextend::color_branches(dend, k = 2)
+          ComplexHeatmap::Heatmap(all_phenotypes_markers,name = "Fluoresc.",
+                                  col = col_fun,
+                                  cluster_rows = dend,
+                                  cluster_columns = F,
+                                  row_names_gp = gpar(fontsize = 2),
+                                  rect_gp = gpar(col = "white", lwd = 0.1), # white borders
+                                  row_split = 5 # apply cutree() on the row/column dendrogram   # 417: 9 with the non-scaled R # 4084 (with 5 they are all within the same group, B9 and G5 could cluster somewhere else given CD10, and this tumor is CD10+??)
+                                  )
+          
+          all_phenotypes_markers
+          
+          NUM_CLUSTERS=2 # Add pca with all cells (3 patients) and not scaled a priori
+          pca_res1 <- prcomp(all_phenotypes_markers, center = T, scale. = T)
+          # I have to select the number of clusters because it is too much memory to choose it with NbClust
+          model=kmeans(all_phenotypes_markers, centers = NUM_CLUSTERS, algorithm = "Hartigan-Wong", iter.max = 1000) # “Hartigan-Wong”, “Lloyd”, “Forgy”, “MacQueen”
+          Updated_FACS$cluster <- as.character(model$cluster)
+          
+          autoplot(pca_res1, data = Updated_FACS, 
+                   colour = 'Geno', size=NA, 
+                   alpha=1, label = TRUE, label.size=3) +
+            theme_classic() +
+            theme(legend.position = "bottom",plot.title = element_text(hjust=0.5)) +
+            scale_color_manual(values = c("plum3","palegreen3","grey")) +
+            guides(colour = guide_legend(override.aes = list(size=5))) +
+            labs(color="", title = mypatient_name)
+          
+          ggsave(paste0(fig_dir,"/PCA.",patient,".pdf",sep=""), dpi = 300, height = 5, width = 6)
+  
+}        
+                
+CreatePCA(patient="4295")
+CreatePCA(patient="417")
+CreatePCA(patient="445")
+CreatePCA(patient="4084")
+
+```
+
+
+# Fig 5F
+
+```{r patient phylogeny 4295}
+
+
+    patient <- "4295"
+    # Load the cellphy tree with the support
+    # the bootstrap information is encoded within the label column
+    tree_support <- ape::read.tree(file = paste0(input_dir,"CellPhy.",patient,".GT10+FO+E.nobulks.noCNVs.raxml.support"))
+    tree_support <- ape::root(tree_support, "4295_A11")
+    tree_support=ape::bind.tree(tree_support,ape::read.tree(text="(zeros:0);"))
+    tree_support <- ape::root(tree_support, "zeros")
+
+        
+    # Load the tree with the exome mutations mapped
+    tree_exome <- readRDS(
+      file = paste0(input_dir,
+            "TreeMutWithZeros.",patient,".genome.exomemapped.rds")) # 
+    tree_exome@phylo <- ape::root(tree_exome@phylo, "zeros")
+
+    # Copy the bootstrap information from label to a new column
+    # to rename the labels with the function makeNodeLabel
+    # which should be equivalent among trees after rooting to the same node
+    tree_support_annotation <- tree_support %>% tibble::as_tibble() %>%
+      dplyr::mutate(bootstrap=as.numeric(label)) %>% treeio::as.treedata()
+      tree_support_annotation@phylo <- ape::makeNodeLabel(tree_support_annotation@phylo, method = "number", prefix = "N")
+    # Add the bootstrap information to the tree_exome using the label 
+    tree_exome_withbootstrap <- tree_exome %>% tibble::as_tibble() %>%
+      dplyr::full_join(tree_support_annotation %>% as_tibble() %>% dplyr::select(label,bootstrap), by=c("label")) %>%
+      treeio::as.treedata()
+    
+    tree_exome_withbootstrap@phylo <- ape::root(tree_exome_withbootstrap@phylo, "zeros")
+    tree_exome_withbootstrap@phylo$tip.label <- gsub("zeros",paste0(patient,"_","Germline"), tree_exome_withbootstrap@phylo$tip.label)
+    
+      # CHANGE PATIENT NAME
+      tree_exome_withbootstrap@phylo$tip.label <- gsub("4084_","D-",gsub("445_","D-",gsub("417_","B-",gsub("4295_","A-",tree_exome_withbootstrap@phylo$tip.label ))))
+    
+     saveRDS(tree_exome_withbootstrap, paste0(input_dir,
+            "TreeMutWithZeros.",patient,".genome.exomemapped.bootstrap.rds"))
+      
+    top2bottomtree <- ggtree(tree_exome_withbootstrap) +
+      geom_tiplab(size=2, angle=90, hjust=1) +
+      geom_rootedge(10) +
+      # Exome annotations
+      geom_nodelab(aes(label=mutList2),color="black",fontface = 'bold', 
+                   alpha = 0.9, size=1.5, angle=0, vjust=-0.5, 
+                   hjust=1.1, show_guide=F) +
+      # bootstrap annotations
+      geom_nodelab(aes(label=bootstrap, fontface = 'bold', color=bootstrap), 
+                   nudge_y = 0, # actually x axis 
+                   nudge_x = -2, size=2) +  # actually y axis 
+      scale_color_gradient(low = "white", high = "darkorange") +
+      geom_strip('A-C8', 'A-G8', barsize=2, color='plum3', 
+            label="", offset = -1900, offset.text=0.1) +
+      geom_strip('A-D9', 'A-A11', barsize=2, color='palegreen3', 
+            label="", offset = -1900, offset.text=0.1) +
+      geom_treescale(x=1800, y=25, # y is actually x (number of cells)
+                     width=200, color='grey') + # add scale
+      theme(legend.position = "top") +
+      labs(col="Bootstrap ") +
+      layout_dendrogram()  # bottom to top
+   
+    top2bottomtree
+  
+    ggsave(file = paste(fig_dir,"BigTree.",patient,".pdf",sep=""), dpi = 300, height = 9, width =7)
+
+
+```
+
+# Fig 5G 
+
+```{r patient phylogenies small}
+
+
+ 
+GetSmallerTrees <- function(patient, height=2.5){
+  
+    if (patient=="417"){
+      outgroup <- "B10"
+      nontumor <- c("B-B10","B-A2")
+      tumor <- c("B-B9","B-F3")
+    } else if (patient=="445"){
+      outgroup <- "A3"
+      nontumor <- c("C-A3","C-F4")
+      tumor <- c("C-H11","C-G6") 
+    } else if (patient=="4084"){
+      outgroup <- "E2"
+      tumor <- c("D-F1","D-H6")
+      nontumor <- c()
+    }
+
+      tree_support <- ape::read.tree(file = paste0(input_dir,"CellPhy.",patient,".GT10+FO+E.nobulks.noCNVs.raxml.support"))
+    tree_support <- ape::root(tree_support, paste0(patient,"_",outgroup))
+    tree_support=ape::bind.tree(tree_support,ape::read.tree(text="(zeros:0);"))
+    tree_support <- ape::root(tree_support, "zeros")
+
+        
+    # Load the tree with the exome mutations mapped
+    tree_exome <- readRDS(
+      file = paste0(input_dir,
+            "TreeMutWithZeros.",patient,".genome.exomemapped.rds")) # 
+    tree_exome@phylo <- ape::root(tree_exome@phylo, "zeros")
+
+    # Copy the bootstrap information from label to a new column
+    # This way I can rename the labels with the function makeNodeLabel
+    # which should be equivalent among trees after rooting to the same node
+    tree_support_annotation <- tree_support %>% tibble::as_tibble() %>%
+      dplyr::mutate(bootstrap=as.numeric(label)) %>% treeio::as.treedata()
+      tree_support_annotation@phylo <- ape::makeNodeLabel(tree_support_annotation@phylo, method = "number", prefix = "N")
+    # Add the bootstrap information to the tree_exome using the label 
+    tree_exome_withbootstrap <- tree_exome %>% tibble::as_tibble() %>%
+      dplyr::full_join(tree_support_annotation %>% as_tibble() %>% dplyr::select(label,bootstrap), by=c("label")) %>%
+      treeio::as.treedata()
+    
+    tree_exome_withbootstrap@phylo <- ape::root(tree_exome_withbootstrap@phylo, "zeros")
+    tree_exome_withbootstrap@phylo$tip.label <- gsub("zeros",paste0(patient,"_","Germline"), tree_exome_withbootstrap@phylo$tip.label)
+    
+      # CHANGE PATIENT NAME
+      tree_exome_withbootstrap@phylo$tip.label <- gsub("4084_","D-",gsub("445_","C-",gsub("417_","B-",gsub("4295_","A-",tree_exome_withbootstrap@phylo$tip.label ))))
+    
+    
+     # LEFT2RIGHT  
+    left2right <- ggtree(tree_exome_withbootstrap) +
+      geom_tiplab(size=2, angle=0) +
+      geom_rootedge(50) +
+      # Exome annotations
+      geom_nodelab(aes(label=mutList2),color="black",fontface = 'bold', 
+                   alpha = 0.9, size=1.5, angle=0, vjust=0.5,
+                   lineheight = 0.8, # I think is line space between newlines
+                   hjust=1.1, show_guide=F) +
+      # bootstrap annotations
+      geom_nodelab(aes(label=bootstrap, fontface = 'bold', color=bootstrap), 
+                   nudge_y = 0, # actually x axis 
+                   nudge_x = -2, size=2) +  # actually y axis 
+      scale_color_gradient(low = "white", high = "darkorange") +
+      geom_strip(tumor[1], tumor[2], barsize=2, color='plum3', 
+            label="", offset = 300, offset.text=0.1) +
+      geom_strip(nontumor[1], nontumor[2], barsize=2, color='palegreen3', 
+            label="", offset = 300, offset.text=0.1) +
+      geom_treescale(x=100, y=22, # y is actually x (number of cells)
+                     width=200, color='grey') + # add scale
+      theme(legend.position = "none") +
+      labs(col="Bootstrap ") 
+    left2right
+    ggsave(file = paste(fig_dir,"BigTree.",patient,".pdf",sep=""), dpi = 300, 
+           height = height, width =7)
+
+    
+
+}    
+  
+
+GetSmallerTrees(patient = "417", height=2.5)
+GetSmallerTrees(patient = "445", height=3)
+GetSmallerTrees(patient = "4084", height=2)
+  
+```
+
+
+# Fig 5C
+
+Mutational signatures plot and generation of RDS with signatures
+```{r}
+
+
+MutationalPatternPerPatient <- function(patient){
+  
+          mutation_context_info <- fread(file=paste0(input_dir, "MutationalContext.",patient,".txt"), header = F, col.names = c("chrompos","Pattern"))
+
+        
+          dim(mutation_context_info)
+            
+          branch_mapping_info <- read.table(file=paste0(input_dir,"VariantSitesCellPhyAfterMutationMapping.genome.",patient,".bed"), sep = "\t", col.names = c("chr","start","pos","branch")) %>%
+  
+            
+            dplyr::mutate(chrompos=paste0(chr,":",pos)) 
+          dim(branch_mapping_info)
+          
+           branch_mapping_info <- branch_mapping_info %>%
+             dplyr::mutate(Sample=gsub(paste0(patient,"_",sep=""),"",branch)) %>%
+             dplyr::mutate(branch2=paste0(patient,"-",ifelse(nchar(Sample)<=3,Sample,"internal"))) %>%
+             dplyr::rename(branch_original=branch) %>%
+             dplyr::rename(branch=branch2)
+
+          # Merge context and mapping branch for each variant & create the spectrum counts #
+
+            mutation_context_info_germline <- fread(file=paste0(input_dir,"MutationalContextGermline.",patient,".txt"), header = F, col.names = c("chrompos","Pattern")) %>%
+
+            dplyr::mutate(chr=gsub(":.*","",chrompos)) %>%
+            dplyr::mutate(pos=as.numeric(gsub(".*:","",chrompos))) %>%
+            dplyr::mutate(start=pos-1) %>%
+            dplyr::mutate(branch_original=paste0(patient,"-","germline")) %>%
+            dplyr::mutate(Sample="Germline") %>%
+            dplyr::mutate(branch=branch_original)
+          
+          
+          myspectrum <- dplyr::full_join(mutation_context_info,branch_mapping_info) %>%
+            
+            # add germline information
+            rbind(mutation_context_info_germline) %>%
+            
+            # Remove mutations in chrX and chrY 
+            dplyr::filter(!(chr %in% c("chrX","chrY"))) %>%
+            dplyr::mutate(count=1) %>%
+            dplyr::group_by(branch,Pattern) %>%
+            dplyr::filter(Pattern!=">") %>%
+            dplyr::summarise(number_variants=sum(count)) %>% 
+            tidyr::pivot_wider(names_from = branch, values_from=number_variants, values_fill = 0) 
+
+          return(myspectrum)
+}
+
+patient_list<- c("Invitro","4295","417","445","4084")
+
+myspectrum <- Reduce(function(x, y) merge(x, y, by="Pattern"), lapply(patient_list, MutationalPatternPerPatient))
+
+
+# get the input in deconstructSigs format
+my_spectrum <- myspectrum %>%
+  # Change into deconstructSigs format
+  dplyr::mutate(Pattern=paste0(substr(Pattern, 1,1),"[",substr(Pattern, 2,4),"]",substr(Pattern, 5,5))) %>%
+  # Make sure the order of levels is the same
+  # get the levels from the example dataset
+  dplyr::mutate(Pattern=factor(as.character(Pattern),levels = colnames(randomly.generated.tumors)))
+
+# Plot the 96 pattern
+library(wesanderson)
+my_spectrum %>%
+  dplyr::mutate(mut=substr(Pattern, start = 3, stop = 5)) %>%
+  dplyr::mutate(Pattern=paste0(substr(Pattern,1,1),".",substr(Pattern,7,7))) %>%
+  tidyr::pivot_longer(cols=colnames(my_spectrum)[!(colnames(my_spectrum) %in% c("Pattern"))], 
+                      names_to = "Branch",values_to="Counts") %>%
+  dplyr::mutate(Branch=ifelse(grepl("Invitro-germline",Branch),"DLD1 germline\n& in vitro",Branch)) %>%
+  dplyr::mutate(Branch=ifelse(grepl("-germline",Branch),"Patient\ngermline",Branch)) %>%
+  dplyr::mutate(Branch=gsub("-.*","",Branch)) %>%
+ dplyr::mutate(Branch=plyr::revalue(Branch, c("Invitro"="DLD1\nsomatic","NA12878"="NA12878",
+                                              "4295"="Patient A\nsomatic",
+                                                 "417"="Patient B\nsomatic",
+                                                 "445"="Patient C\nsomatic",
+                                                 "4084"="Patient D\nsomatic"))) %>%
+  dplyr::filter(grepl(".*atient.*(somatic|germline)$",Branch)) %>%
+  ggplot(aes(Pattern, Counts,fill=mut)) +
+  geom_col() +
+  facet_grid(Branch ~ ., scales = "free_y") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle=90, size=5, hjust = 1, vjust = 0.5)) +
+  ggsci::scale_fill_nejm() +
+  facet_grid(Branch ~ mut, scales = "free", space = "free_x") +
+  labs(x="Mutation context",fill="mutation")
+
+ggsave(paste(fig_dir,"MutationalPattern.Patients.pdf",sep=""), dpi = 300, width = 15, height = 5)  
+
+
+  # at least 2 samples
+  # Transform column into rownames
+  names_rows <- my_spectrum$Pattern
+  my_spectrum<- data.matrix(my_spectrum)
+  rownames(my_spectrum) <- names_rows
+  my_spectrum <-my_spectrum[,-1]
+
+  
+my_spectrum_deconstructSigs <- my_spectrum
+
+table_abs_counts_SNVs <- my_spectrum_deconstructSigs %>%
+ as.data.frame() %>%
+ tidyr::pivot_longer(cols = everything(), names_to="Sample", values_to="num") %>%
+ group_by(Sample) %>%
+ mutate(NumSNVs=sum(num)) %>%
+ dplyr::select(Sample,NumSNVs) %>%
+ unique() 
+
+  input_deconstructSigs <- as.data.frame(t(my_spectrum_deconstructSigs))
+    
+
+    RunDeconstructSigsPerSample <- function(n){
+
+         input_deconstructSigs_onesample <- input_deconstructSigs[n,]
+         print(rownames(input_deconstructSigs[n,]))
+         SignaturesDeconstructSigs = whichSignatures(tumor.ref = input_deconstructSigs_onesample,
+                           signatures.limit=NA, # default
+                           signature.cutoff = 0.01, # default
+                           signatures.ref = signatures.cosmic,
+                           sample.id = rownames(input_deconstructSigs)[n], 
+                           contexts.needed = TRUE,
+                           tri.counts.method="genome")  
+         return(SignaturesDeconstructSigs$weights)
+    }
+
+deconstructSigs_combined <- do.call("rbind",lapply(1:nrow(input_deconstructSigs),
+                                                   FUN = RunDeconstructSigsPerSample))
+
+#saveRDS(deconstructSigs_combined, paste0(input_dir,"Signatures.rds")) # last saved 1%
+#saveRDS(table_abs_counts_SNVs, paste0(input_dir,"Signatures.suppl.info.rds")) 
+
+
+
+```
+
+
+# Fig. 5D
+
+```{r }
+
+# Load previous chunk to generate input
+
+# Optional: filter out the invitro cells
+# The signature is sample independent so that doesn't affect the results
+deconstructSigs_combined <- deconstructSigs_combined[which(!grepl("Invitro",rownames(deconstructSigs_combined))),]
+
+# Some signatures have been filtered given the default cutoff from deconstructSigs 
+deconstructSigs_combined$Signature.Other <- 1- rowSums(deconstructSigs_combined)
+
+
+deconstructSigs_combined_melted <- deconstructSigs_combined %>%
+  tibble::rownames_to_column("Sample") %>%
+  tidyr::pivot_longer(cols = colnames(deconstructSigs_combined)[grepl("(Signature|SBS)",colnames(deconstructSigs_combined))], 
+                names_to = "Signature") %>%
+  dplyr::mutate(Signature = gsub("Signature.","SBS",Signature)) %>%
+  dplyr::left_join(table_abs_counts_SNVs) %>%
+  dplyr::mutate(presabs=ifelse(value>0,1,0)) %>%
+  dplyr::group_by(Signature,Sample) %>%
+    dplyr::mutate(presmorethan1cell=sum(presabs)) %>%
+  # Remove signatures present at low frequency
+  dplyr::filter(value>0) %>%
+  dplyr::mutate(Sample=gsub("\\.$","",gsub(".*_","",Sample)))
+  
+
+
+# create plot
+persample_contribution_deconstructsigs <- deconstructSigs_combined_melted  %>%
+    dplyr::mutate(value2=as.numeric(value)*as.numeric(NumSNVs)) %>%
+  dplyr::group_by(Signature,Sample) %>%
+  dplyr::mutate(tot_sig=sum(value2, na.rm = T)) %>%
+  dplyr::mutate(prop=tot_sig/n()) %>%
+  dplyr::ungroup()  %>%
+  dplyr::mutate(tot_SNVs=sum(value2, na.rm = T)) %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(sum(unique(deconstructSigs_combined_melted$NumSNVs))) 
+
+# SORT signatures
+signature_invitro <- c("SBS1","SBS5","SBS3","SBS21","SBS25","SBS22","SBS6","SBS30")
+
+persample_contribution_deconstructsigs$Signature <- factor(as.factor(persample_contribution_deconstructsigs$Signature), levels=c(signature_invitro, setdiff(setdiff(persample_contribution_deconstructsigs$Signature,"SBSOther"),signature_invitro),"SBSOther"))
+
+
+library(RColorBrewer)
+# I can divide the palette until 12
+mycolors <- sample(size = length(levels(persample_contribution_deconstructsigs$Signature)), 
+                   colorRampPalette(brewer.pal(9, "Paired"))(length(levels(persample_contribution_deconstructsigs$Signature))), 
+                   replace = F)
+
+mycolors <- c(mycolors[-1],"#808080") # grey for SBSOther
+
+
+persample_contribution_deconstructsigs$Signature[persample_contribution_deconstructsigs$Signature == 'SBSOther'] <- "Other (<1%)"
+
+signatures_chemotherapy <- c("SBS3","SBS14","SBS21","SBS25","SBS37")
+signatures_foundBcells <- c("SBS9") # "SBS7"
+signatures_clocklike <- c("SBS1","SBS5") 
+signatures_errors <- c("SBS30")
+all_signatures <- persample_contribution_deconstructsigs$Signature
+signature_class=ifelse(all_signatures %in% signatures_chemotherapy, "chemotherapy-related",ifelse(all_signatures %in% signatures_foundBcells, "lymphoid-related",ifelse(all_signatures %in% signatures_clocklike,"clock-like",ifelse(all_signatures %in% signatures_errors, "PTA-related","Other"))))
+signatures_other <- names(table(as.vector(all_signatures[which(signature_class=="Other")])))
+
+cbind(persample_contribution_deconstructsigs, signature_class) %>%
+  dplyr::mutate(signature_class=factor(as.factor(signature_class),levels=c("clock-like","lymphoid-related","chemotherapy-related","PTA-related","Other"))) %>%
+  dplyr::filter(!grepl("(germline)",Sample)) %>%
+  dplyr::mutate(type=ifelse(grepl("internal",Sample),"Shared among cells",ifelse(grepl("germline",Sample),"Germline","Single-cell unique"))) %>%
+  dplyr::group_by(Signature) %>%
+  dplyr::mutate(num_cells=n()) %>%
+  dplyr::filter(num_cells>20) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(Signature!="NA") %>%
+  dplyr::mutate(Patient=gsub("-.*","",Sample)) %>%
+  ggplot(aes(Signature, value,  fill=type,col=type)) +
+  geom_violin(draw_quantiles = c( 0.5), col="black") +
+  facet_grid(. ~ signature_class, scales = "free", space = "free", drop = T) +
+  theme_classic() +
+  ggsci::scale_fill_igv() +
+  ggsci::scale_color_igv() +
+  #coord_flip() +
+  labs(fill="",y="Proportion", x="") +
+  theme(axis.text.x = element_text(angle=90, hjust = 1, vjust = 0.5), 
+        strip.text.x = element_text(angle=90, hjust = 0), 
+        #panel.grid.major = element_blank(),
+        #panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        panel.border = element_rect(colour = "grey", fill = NA),
+        legend.position = "bottom") 
+
+ggsave(paste(fig_dir,"Signatures.DeconstructSigs.Violin.pdf",sep=""), dpi = 300, width = 10, height = 4)  
+
+
+table(persample_contribution_deconstructsigs$Sample)
+```
+
+
+
+# Fig. 5K 
+
+
+```{r createmetadata}
+
+# Obtain a table with the phenotypes for each of the cells
+ phenotypes <- fread(paste0(input_dir, "4295_MRD_BALL_BMMNC_Blast-3_Index.csv")) %>% 
+ dplyr::mutate(Patient="4295") %>%
+ dplyr::rename(cell_names=Cell_location)
+#phenotypes %>% View()
+colnames(phenotypes) <- gsub(":.*","",colnames(phenotypes))
+
+ phenotypes_445 <- fread(paste0(input_dir,"445_Plate1_Index1.csv")) %>%
+   dplyr::mutate(Patient="445") %>%
+   dplyr::rename(cell_names=Index)
+ colnames(phenotypes_445) <- gsub(":.*","",colnames(phenotypes_445))
+ 
+
+ # The plate 417 was sorted with two index sorting files because of the limited cell number. Columns 2-4 are with 417-scIndex_*, and columns 5-12 are in 417PI-2_*.
+  phenotypes_417A <- fread(paste0(input_dir,"417_Plate1_2-4.csv") %>%
+   dplyr::mutate(Patient="417")) %>%
+   dplyr::rename(cell_names=Index)
+ colnames( phenotypes_417A) <- gsub(":.*","",colnames( phenotypes_417A))
+   phenotypes_417B <- fread("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/WGS/417/417_Plate1-5-12.csv") %>%
+   dplyr::mutate(Patient="417") %>%
+   dplyr::rename(cell_names=Index)
+ colnames( phenotypes_417B) <- gsub(":.*","",colnames( phenotypes_417B))
+ phenotypes_417 <- rbind(phenotypes_417A, phenotypes_417B)
+ 
+ 
+ phenotypes_4084 <- fread(paste0(input_dir,"4084_Plate2_Index1.csv") %>%
+   dplyr::mutate(Patient="4084")) %>%
+   dplyr::rename(cell_names=Index)
+ colnames(phenotypes_4084) <- gsub(":.*","",colnames(phenotypes_4084))
+
+ phenotypes_combined <- plyr::rbind.fill(phenotypes, phenotypes_417) %>%
+   plyr::rbind.fill(phenotypes_4084) %>%
+   plyr::rbind.fill(phenotypes_445)
+saveRDS(object = phenotypes_combined, 
+       file = "/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/WGS/FACS_metadata.rds")
+
+```
+
+
+```{r}
+
+
+    # Load premalignant/malignant annotation based on exome and CNV mutations
+    Healthy_info <- fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=0&single=true&output=csv") %>%
+      dplyr::select(Patient,Sample_tag,`Exome/CNV status`) %>%
+      dplyr::rename(cell_names=Sample_tag) %>%
+      dplyr::filter(`Exome/CNV status`=="Premalignant") %>%
+      dplyr::rename(Geno=`Exome/CNV status`)
+
+    originalfacs_indexedcells <-  readRDS(file = paste0(input_dir,"FACS_metadata.rds"))  %>%
+      dplyr::left_join(Healthy_info) %>%
+      dplyr::mutate(`Geno`=ifelse(is.na(`Geno`),"Driver-carrier cell",gsub("Premalignant","Healthy/Premalignant",`Geno`)))
+ 
+
+    phenodata <- originalfacs_indexedcells %>%
+      dplyr::left_join(fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=430520836&single=true&output=tsv") %>% 
+                         dplyr::filter(`Analysis depth`==0.1) %>%
+                         dplyr::mutate(Sample=gsub(".dedup","",Sample)) %>%
+                         dplyr::mutate(cell_names=gsub(".*_","",Sample)) %>%
+      dplyr::filter(!is.na(`Analysis depth`))) %>%
+      dplyr::filter(Notes!="Pretreatment") %>%
+ #                        dplyr::select(cell_names, Patient, `Sequenced bases`)) %>%
+    dplyr::mutate(Patient=plyr::revalue(Patient, c("4295"="A",
+                                                 "417"="B",
+                                                 "445"="C",
+                                                 "4084"="D"))) %>%
+    dplyr::mutate(label=paste0(Patient, "-", cell_names))
+  
+
+# Calculate phylogenetic signal #
+
+  ObtainPhylogeneticSignal <- function(patient) {
+  
+      # Load the tree #
+
+      tree_exome_withbootstrap  <- readRDS(paste0(input_dir,
+                  "TreeMutWithZeros.",patient,".genome.exomemapped.bootstrap.rds"))
+      myanno_tree <- tree_exome_withbootstrap
+      
+      
+      patient_name <- gsub("-.*","",myanno_tree@phylo$tip.label[1])
+      
+      
+      # Discretize the FACS data  #
+
+      phenodatapatient <- phenodata %>%
+            dplyr::filter(Patient==patient_name) %>%
+            dplyr::mutate(across(matches("(CD)"), 
+                                 ~ scale(.x) %>% as.vector)) %>%
+            dplyr::mutate(across(matches("(CD)"), 
+                                 ~ as.numeric(arules::discretize(.x, 
+                                                               method = "frequency", 
+                                                               breaks = 6, labels=c(1,2,3,4,5,6))),
+                                 .names = "discr_{.col}"
+                                 ))  
+  
+      
+              
+      # Remove the healthy cells
+      tips_to_remove <- originalfacs_indexedcells %>%
+        dplyr::filter(Geno=="Healthy/Premalignant") %>%
+        dplyr::filter(Patient==patient) %>%
+        dplyr::select(cell_names) %>%
+        dplyr::mutate(cell_names=paste0(patient_name,"-",cell_names)) %>%
+        unlist()  %>%  as.vector()   
+      myanno_tree@phylo <- ape::makeNodeLabel(myanno_tree@phylo)
+      myanno_tree@phylo <- ape::drop.tip(myanno_tree@phylo,c(tips_to_remove))
+      myanno_tree <- myanno_tree@phylo
+      
+
+      # If I take the whole object instead of the phylo it fails...
+      mytreedata <- left_join(as_tibble(myanno_tree),
+                                phenodatapatient %>% dplyr::filter(label %in% myanno_tree$tip.label), by = 'label') %>%
+                    treeio::as.treedata()
+      #saveRDS(mytreedata, file = paste0(input_dir,patient,".phenotypicallyannotated.rds",sep=""))
+
+      # Compute phylogenetic signal #
+
+      mytreedata <- readRDS(file = paste0(input_dir,patient,".phenotypicallyannotated.rds",sep=""))
+      myphenotypes <- mytreedata %>%
+                             tibble::as.tibble() %>%
+                             dplyr::filter(label %in% mytreedata@phylo$tip.label[!is.na(mytreedata@phylo$tip.label)]) %>%
+                             tibble::column_to_rownames("label")
+        myphenotypes_sorted <- myphenotypes[match(mytreedata@phylo$tip.label,rownames(myphenotypes)),]
+        myphenotypes_sorted <- myphenotypes_sorted[,colnames(phenodatapatient)[grepl("^(CD|discr|TIME|breadth)", colnames(phenodatapatient))]]
+        random_control <- c(rnorm(n=nrow(myphenotypes_sorted)-1),NA)
+        myphenotypes_sorted$`Random variable` <- random_control
+        
+
+        phylo.signal <- function(n){
+            phylo_pheno <- phytools::phylosig(mytreedata@phylo, myphenotypes_sorted[,n], test=T) # phylogenetic signal in trait "TIME"
+            results <- c(patient_name,colnames(myphenotypes_sorted)[n],phylo_pheno$K, phylo_pheno$P)
+            return(results)
+        }
+        
+        results_per_patient <- do.call("rbind",lapply(X = 1:ncol(myphenotypes_sorted), FUN = phylo.signal))
+        return(results_per_patient)
+  }
+  
+  patients <- c("4295","445","417","4084")
+  signal_combined <- do.call("rbind",lapply(patients,ObtainPhylogeneticSignal))
+  colnames(signal_combined) <- c("patient","phenotype","Phylogenetic signal (K)", "Hypothesis test p.value")
+  
+  signal_combined %>% as.data.frame() %>%
+        dplyr::filter(grepl("^(CD|breadth)",phenotype)) %>%
+    dplyr::mutate(category=ifelse(grepl("^(CD|disc)",phenotype),"Surface marker expression","Negative\ncontrol")) %>%
+    dplyr::mutate(phenotype=gsub(".*_","",phenotype)) %>%
+   dplyr::mutate(phenotype=gsub("breadth","Genome\nbreadth",phenotype)) %>%
+    dplyr::mutate(phenotype=factor(as.factor(phenotype), levels=c("Random variable","TIME","Genome\nbreadth","CD45","CD19","CD34","CD20","CD10","CD38"))) %>%
+    dplyr::mutate(test=ifelse(`Hypothesis test p.value`< 0.05, "p < 0.05","ns")) %>%
+    ggplot(aes(phenotype,as.numeric(`Phylogenetic signal (K)`))) +
+    geom_col(aes(fill=patient,alpha=test, group=patient), position="dodge") +
+    labs(x="", y="Phylogenetic signal for the tumor population\n\n(Blomberg's K)") +
+    theme_bw() +
+    facet_grid(. ~ category, scales = "free", space = "free") +
+    scale_fill_manual(values=c("firebrick3","darkgoldenrod2","mediumaquamarine","mediumpurple1"))
+
+ggsave(paste(fig_dir,"PhylogeneticSignalPatient.genomebreadth.pdf",sep=""), dpi = 300, width = 6, height = 5)  
+
+```
+
+# Fig. 5L
+
+```{r}
+
+patient <- "445"
+layout_tree <- "rectangular"
+mytreedata <- readRDS(file = paste0(input_dir,patient,".phenotypicallyannotated.rds",sep=""))
+patient_name <- gsub("-.*","",mytreedata@phylo$tip.label[1])
+tree2plot <- mytreedata
+treefigure <- ggtree(tree2plot, layout = layout_tree) + #, branch.length = "none") +
+  geom_tiplab(size=2.5,angle=90,hjust=1.2, fontface=2) +
+  xlim(0,1500) +
+  scale_color_distiller(type = "seq",
+                        direction = 1,
+                        palette = "Blues") +
+  layout_dendrogram() + # vertical display
+  labs(x="",color  = "Local\nbranching index", shape = "") +
+  theme(legend.position = "right")   # bottom to top
+  
+
+phenodatapatient <- phenodata %>%
+            dplyr::filter(Patient==patient_name) %>%
+            #dplyr::mutate(across(matches("(CD)"), 
+            #                     ~ scale(.x) %>% as.vector)) %>%
+            dplyr::mutate(across(matches("(CD)"), 
+                                 ~ as.numeric(arules::discretize(.x, 
+                                                               method = "frequency", 
+                                                               breaks = 6, labels=c(1,2,3,4,5,6))),
+                                 .names = "discr_{.col}"
+                                 ))  
+
+Plot1 <- gheatmap(treefigure, phenodatapatient[,c("label",colnames(phenodatapatient)[grepl("^CD",colnames(phenodatapatient))])] %>% tibble::column_to_rownames("label"),
+                  offset=2.8, # distance from tips to the matrix
+                  #offset=100, # distance from tips to the matrix
+                  width=0.5, # default 1
+                  colnames_angle=0, 
+                  hjust = 0, # centering colnames
+                  colnames_offset_y = -15,
+                  colnames_position = "bottom",
+                  font.size = 3, # matrix colnames
+                  color="lightgrey", # color of cell border
+                  legend_title="",
+                  colnames=T
+) +
+  scale_fill_gradient2(low = "lightyellow",mid="orange", high = "brown", na.value = "lightgrey", midpoint = 3.5) +
+  #scale_fill_gradient2(low = "white",mid="lightyellow", high = "darkolivegreen3", na.value = "lightgrey") +
+  theme_minimal() +
+  labs(fill="Normalized fluorescence ") +
+  theme(legend.position = "bottom")
+
+Plot1
+
+zeb_clone <- c("A11","E3","E3","D3","H5")
+phenodatapatient %>%
+  dplyr::select(cell_names,CD10) %>%
+  dplyr::mutate(clone=ifelse(cell_names %in% zeb_clone, "ZEB2.Q1072K\nmutant cells","ZEB2\nwildtype cells")) %>%
+  ggplot(aes(clone,CD10, group=clone, fill=clone)) +
+  #geom_density(alpha=0.5) +
+  #geom_violin() +
+  geom_boxplot( col="black", outlier.shape = NA) +
+  geom_jitter() +
+  scale_fill_manual(values = c("plum3","brown")) +
+  labs(y="CD10 fluorescence",x="",fill="", title = "Patient C") +
+  theme_classic() +
+  stat_compare_means(label.sep = "\n", label = "p.signif",label.x = 1.5, label.y = 15000, method = "wilcox") +
+  theme(legend.position = "bottom") +
+  coord_flip()
+
+ggsave(paste(fig_dir,"445.zeb.cd10.pdf",sep=""), dpi = 300, width = 5, height = 3)  
+
+```
+
+# Fig. 5M
+
+```{r}
+
+patient <- "4084"
+layout_tree <- "rectangular"
+mytreedata <- readRDS(file = paste0(input_dir,patient,".phenotypicallyannotated.rds",sep=""))
+patient_name <- gsub("-.*","",mytreedata@phylo$tip.label[1])
+tree2plot <- mytreedata
+treefigure <- ggtree(tree2plot, layout = layout_tree) + #, branch.length = "none") +
+  geom_tiplab(size=2.5,angle=90,hjust=1.2, fontface=2) +
+  xlim(0,1500) +
+  scale_color_distiller(type = "seq",
+                        direction = 1,
+                        palette = "Blues") +
+  layout_dendrogram() + # vertical display
+  labs(x="",color  = "Local\nbranching index", shape = "") +
+  theme(legend.position = "right")   # bottom to top
+  
+
+phenodatapatient <- phenodata %>%
+            dplyr::filter(Patient==patient_name) %>%
+            #dplyr::mutate(across(matches("(CD)"), 
+            #                     ~ scale(.x) %>% as.vector)) %>%
+            dplyr::mutate(across(matches("(CD)"), 
+                                 ~ as.numeric(arules::discretize(.x, 
+                                                               method = "frequency", 
+                                                               breaks = 6, labels=c(1,2,3,4,5,6))),
+                                 .names = "discr_{.col}"
+                                 ))  
+
+Plot1 <- gheatmap(treefigure, phenodatapatient[,c("label",colnames(phenodatapatient)[grepl("^CD",colnames(phenodatapatient))])] %>% tibble::column_to_rownames("label"),
+                  offset=2.8, # distance from tips to the matrix
+                  #offset=100, # distance from tips to the matrix
+                  width=0.5, # default 1
+                  colnames_angle=0, 
+                  hjust = 0, # centering colnames
+                  colnames_offset_y = -15,
+                  colnames_position = "bottom",
+                  font.size = 3, # matrix colnames
+                  color="lightgrey", # color of cell border
+                  legend_title="",
+                  colnames=T
+) +
+  scale_fill_gradient2(low = "lightyellow",mid="orange", high = "brown", na.value = "lightgrey", midpoint = 3.5) +
+  #scale_fill_gradient2(low = "white",mid="lightyellow", high = "darkolivegreen3", na.value = "lightgrey") +
+  theme_minimal() +
+  labs(fill="Normalized fluorescence ") +
+  theme(legend.position = "bottom")
+
+Plot1
+
+kras_clone <- c("H6","C5","D6","B10","G5","D9","D11","E5","D8","G7","C7","C8","F10","A9","D10","F9","B9")
+
+phenodatapatient %>%
+  dplyr::select(cell_names,TIME) %>%
+  dplyr::mutate(clone=ifelse(cell_names %in% kras_clone, "KRAS.G13D\nmutant cells","KRAS\nwildtype cells")) %>%
+  ggplot(aes(clone, TIME, group=clone, fill=clone)) +
+  #geom_density(alpha=0.5) +
+  #geom_density() +
+    geom_violin() +
+  geom_boxplot(width=0.09, col="black", outlier.shape = NA) +
+  scale_fill_manual(values = c("plum3","#408CAD")) +
+  labs(y="Time",x="",fill="", title = "Patient D") +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+    stat_compare_means(label.sep = "\n", label = "p.signif",label.x = 1.5, label.y = 650) +
+  coord_flip()
+
+phenodatapatient %>%
+  dplyr::select(cell_names,CD10) %>%
+  dplyr::mutate(clone=ifelse(cell_names %in% kras_clone, "KRAS.G13D\nmutant cells","KRAS\nwildtype cells")) %>%
+  ggplot(aes(clone, CD10, group=clone, fill=clone)) +
+  #geom_density(alpha=0.5) +
+  #geom_density() +
+ #   geom_violin() +
+  geom_boxplot(col="black", outlier.shape = NA) +
+  geom_jitter() +
+
+#  geom_point() +
+  scale_fill_manual(values = c("plum3","#408CAD")) +
+  labs(y="CD10 fluorescence",x="",fill="", title = "Patient D") +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+    stat_compare_means(label.sep = "\n", label = "p.signif",label.x = 1.5, label.y = 25000, method = "wilcox") +
+  coord_flip()
+
+ggsave(paste(fig_dir,"4084.kras.cd10.pdf",sep=""), dpi = 300, width = 5, height = 3)  
+
+```
+
+
+
+# Fig S6D
+
+# EXOME: Last analysis
+
+```{r}
+
+patient <- "4295"
+
+PlotExomeVariants <- function(patient){
+ 
+output<- readRDS(paste0(input_dir,"Mutect",patient,".filtered.rds"))
+
+
+
+output %>%
+  dplyr::filter(grepl("(B|T1|T2)$",sample)) %>%
+  dplyr::mutate(id=gsub("_.*p","",id)) %>%
+  dplyr::filter(!grepl("_.",id)) %>%
+  dplyr::mutate(timing=ifelse(grepl("-4295",sample),"remission","diagnosis")) %>%
+  dplyr::arrange(VAF) %>%
+  ggplot(aes(x=id, y=VAF, fill=timing)) +
+  geom_violin() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) +
+  ggsci::scale_fill_cosmic() 
+
+output %>%
+  dplyr::filter(sequencing=="in tree") %>%
+      dplyr::mutate(presabs=ifelse(vaf_pres>0,1,0)) %>%
+      dplyr::mutate(ExonicFunc.refGene=ifelse(ExonicFunc.refGene==".","intronic or intragenic", ExonicFunc.refGene)) %>%
+      dplyr::group_by(id) %>%
+      dplyr::mutate(num_cells=sum(presabs, na.rm = T)) %>%
+      dplyr::arrange(desc(num_cells)) %>%
+      ggplot(aes(x = sample,y = forcats::fct_reorder(id,num_cells),fill=VAF)) +
+        geom_raster() +
+    theme_light() +
+        theme(axis.text.x = element_text(angle=90, hjust = 1, vjust=0.5),
+              axis.text.y = element_text(),
+              legend.position = "bottom") +
+      scale_fill_distiller(palette = "Spectral", na.value = "lightgrey") +
+    labs(x="", y="") +
+     facet_grid(ExonicFunc.refGene ~ ., scales = "free", space = "free")
+    
+  
+ggsave(paste(fig_dir,"ComplexHeatmap.Exome.",patient,".pdf",sep=""), dpi = 300, width=12, height=10)
+ 
+}
+
+
+patients <- c("4295")
+lapply(X = patients, FUN = PlotExomeVariants)
+
+ 
+  
+```
+
+
+
+
+# Figure S5
+
+```{r depth-breadth relationship}
+
+
+# FIRST SEQUENCING RUN
+patient <- "Invitro"
+SingleCheck_2 <- data.table::fread(paste(input_dir,
+                           patient, "_singlecheck.combined.txt",sep="")) %>%
+  dplyr::mutate(Patient=patient)
+
+
+# ILLUMINA MEDIUM DEPTH
+SingleCheck_3 <- data.table::fread(paste(input_dir,
+                           patient, "_singlecheck.combined.full.txt",sep="")) %>%
+  dplyr::mutate(Patient=patient)
+
+
+
+# Merge all datasets
+colnames(SingleCheck_2) <- colnames(SingleCheck_3) <- c("Sample","Sequenced bases","Analysis depth",
+                           "window size","delta","% unmapped reads",
+                           "% reads mapped to the mitochondria","breadth",
+                           "autocorrelation","coefficient of variation",
+                           "gini coefficient","MAD","Potential contaminants","Patient")
+
+
+singlecheck_results <- rbind.data.frame(SingleCheck_2 %>% dplyr::mutate(Sequencing="First run"), SingleCheck_3 %>% dplyr::mutate(Sequencing="First plus\nsecond run") %>% dplyr::filter(Sample!="Invitro_H1.dedup")) %>%
+  dplyr::mutate(Sample=gsub("_(A|C|G|T)(A|C|G|T)+","",gsub(".dedup","",Sample))) %>%
+  dplyr::mutate(Amplification=ifelse(grepl("(Barcode|T1|Bulk|NonB|4072T|368B|417T|380T|445T)",Sample),"Bulk","SC")) 
+
+
+# Relationship between breadth and depth
+singlecheck_results %>% 
+  dplyr::select(Sample, Patient, `Analysis depth`, breadth,MAD,`gini coefficient`,Sequencing,Amplification) %>%
+  dplyr::mutate(Sample=gsub("4272T1"," Bulk_4272T1",
+                            gsub("Undetermined"," Bulk_und",
+                                             gsub("4295_","",
+                                                  gsub("Barcode","",Sample))))) %>%
+  dplyr::mutate(Sequencing=factor(as.factor(Sequencing),levels=c("First run","First plus\nsecond run"))) %>%
+  dplyr::mutate(Amplification=gsub("SC","PTA DLD1",gsub("Bulk","Single-cell colony DLD1\n(Póti et al., 2018)",Amplification))) %>%
+  ggplot(aes(`Analysis depth`, breadth)) +
+  #geom_point(aes(col=`Patient`),size=2) +
+  geom_smooth(method = "loess", col="grey", aes(group=Amplification), fill="lightgrey") +
+  theme_bw() +
+  #geom_point(aes(col=Amplification, shape=Sequencing),size=1) +
+  geom_point(aes(col=Amplification, shape=Amplification),size=2) +
+  scale_x_continuous(trans = "log10", breaks = c(0,1,2,3,5,8,15,30,50,100,200)) +
+  #xlim(0,40) +
+  #scale_color_brewer(palette = "Dark2") +
+  theme(axis.text.x = element_text(angle=45,hjust=1,vjust=1, size=9), 
+        strip.text = element_text(size=10), strip.background = element_blank()) +
+  labs(x="")  +
+  #ylim(0,100) +
+  #scale_color_distiller(palette = 3) +
+  scale_color_manual(values=c("dodgerblue3","black")) +
+  labs(x="Sequencing depth (x)",
+       y="Coverage breadth\n(percentage of genome covered)",
+       fill="Coverage dispersion\n(MAD)")
+
+ggsave(filename = paste(fig_dir,"/SingleCheck.Breadth-Depth.pdf",sep=""), dpi = 300, height = 4, width = 6)
+
+```
+
+
+
+```{r mad pta-mda}
+
+SingleCheck <- fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=430520836&single=true&output=csv")
+
+
+SingleCheck %>%
+  dplyr::select(Patient,Sample,`Analysis depth`,`breadth`,`MAD`,`Amplification`) %>%
+  dplyr::filter(Patient %in% c("DLD1","NA12878")) %>%
+  dplyr::filter(`Analysis depth`== 0.1 | Amplification=="Bulk") %>%
+  dplyr::filter(Amplification!="RSO") %>%
+  dplyr::mutate(Tag=ifelse(Patient=="NA12878" & Amplification=="PTA","PTA NA12878\n(Gonzalez-Pena et al., 2020)",ifelse(Patient=="NA12878" & Amplification=="MDA","MDA  NA12878\n(Gonzalez-Pena et al., 2020)",ifelse(Patient=="DLD1" & Amplification=="PTA","PTA DLD1",ifelse(Patient=="DLD1" & Amplification=="Bulk","Single-cell colony DLD1\n(Póti et al., 2018)",Amplification))))) %>%
+  dplyr::mutate(`coverage dispersion (MAD)`=MAD) %>%
+  tidyr::pivot_longer(cols=c(`breadth`,`coverage dispersion (MAD)`)) %>%
+  dplyr::mutate(Tag=factor(as.factor(Tag), levels=c("Single-cell colony DLD1\n(Póti et al., 2018)", "PTA DLD1", "PTA NA12878\n(Gonzalez-Pena et al., 2020)", "MDA  NA12878\n(Gonzalez-Pena et al., 2020)"))) %>%
+  dplyr::filter(name!="breadth") %>%
+  dplyr::mutate(Amplification=factor(as.factor(Amplification), levels = c("Unamplified bulk","PTA","MDA"))) %>%
+    ggplot(aes(Tag, value, col=Tag)) +
+  geom_violin(outlier.shape = NA) +
+  stat_summary(fun.data = "mean_cl_boot", geom = "pointrange") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle=90,hjust=1,vjust=0.5, size=9), 
+        strip.text = element_text(size=11), 
+        strip.background = element_blank(),
+        legend.position = "none") +
+  scale_color_manual(values = c("black","dodgerblue3","dodgerblue3","red3")) +
+  labs(x="",y="MAD\n(coverage dispersion)",col="") 
+
+ggsave(paste0(fig_dir,"/MAD.BulkvsPTAvsMDA.pdf"), dpi = 300, height = 4.5, width = 5.5)
+
+```
+
+
+```{r allelic imbalance}
+
+# PTA cell H1
+allelic_invitro <- fread(paste0(input_dir,"H1.chr21.heterozygous.alleliccounts.tsv"))  %>%
+  dplyr::mutate(Sample="H1") %>%
+  dplyr::mutate(method="PTA")
+
+# MDA cell C6
+allelic_MDA <- fread(paste0(input_dir, "C6.chr21.heterozygous.alleliccounts.tsv")) %>%
+  dplyr::mutate(Sample="C6") %>%
+  dplyr::mutate(method="MDA") 
+
+# Table with sample information, will be combined into allelic in the code below
+sc_table <- fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=0&single=true&output=csv") %>%
+  dplyr::mutate(Amplification=factor(Amplification, levels=c("Bulk","PTA","Ampli1","PicoPLEX","MALBAC","REPLIg","GenomiPhi","TruePrime")))
+
+
+BAF <- allelic_invitro %>% 
+  dplyr::rename(depth=V7) %>%
+  dplyr::left_join(sc_table %>% dplyr::filter(Patient %in% c("Invitro","GM12878")) %>%
+                     dplyr::select(Sample_tag,Amplification,`WGS sequencing depth`) %>% dplyr::mutate(Sample=Sample_tag) %>% dplyr::select(-Sample_tag) %>% dplyr::filter(`WGS sequencing depth`!="")) %>%
+  dplyr::mutate(Sample=gsub("UndeterminedBarcode","Healthy bulk", gsub("4272T1","Tumor bulk",Sample))) %>%
+  dplyr::mutate(Sample2=paste(Sample," (",`WGS sequencing depth`,"x)", sep="")) %>%
+  dplyr::mutate(BAF=as.numeric(as.numeric(V4)/(as.numeric(V3)+as.numeric(V4))))
+BAF %>%
+  dplyr::filter(depth %in% c(1,3,5,8,10,15,20,30,50)) %>%
+  ggplot(aes(x=BAF,col=as.factor(depth),group=as.factor(depth))) +
+  geom_density(size=0.5,key_glyph = draw_key_path)+
+  theme_classic2() +
+  theme(strip.background = element_blank(), legend.position = "bottom") +
+  scale_color_brewer(palette = "YlGnBu") +
+  labs(x = "B-allele frequency at heterozygous germline SNPs on chromosome 21",y="Density",col="Average\nsequencing depth\n(in silico downsampling)", title = "PTA")
+ggsave(filename = paste(fig_dir,"/AllelicImbalance.H1.pdf",sep=""), height = 4, width = 6.1)
+  
+
+BAF <- allelic_MDA %>%
+  dplyr::rename(depth=V7) %>%
+  dplyr::left_join(sc_table %>% dplyr::filter(Patient %in% c("Invitro","GM12878")) %>%
+                     dplyr::select(Sample_tag,Amplification,`WGS sequencing depth`) %>% dplyr::mutate(Sample=Sample_tag) %>% dplyr::select(-Sample_tag) %>% dplyr::filter(`WGS sequencing depth`!="")) %>%
+  dplyr::mutate(Sample=gsub("UndeterminedBarcode","Healthy bulk", gsub("4272T1","Tumor bulk",Sample))) %>%
+  dplyr::mutate(Sample2=paste(Sample," (",`WGS sequencing depth`,"x)", sep="")) %>%
+  dplyr::mutate(BAF=as.numeric(as.numeric(V4)/(as.numeric(V3)+as.numeric(V4))))
+BAF %>%
+  dplyr::filter(depth %in% c(1,3,5,8,10,15,20,30,50)) %>%
+  ggplot(aes(x=BAF,col=as.factor(depth),group=as.factor(depth))) +
+  geom_density(size=0.5,key_glyph = draw_key_path)+
+  theme_classic2() +
+  theme(strip.background = element_blank(), legend.position = "bottom") +   scale_color_brewer(palette = "YlGnBu") +
+  theme(strip.background = element_blank(), legend.position = "bottom") +   scale_color_brewer(palette = "YlOrRd") +
+  labs(x = "B-allele frequency at heterozygous germline SNPs on chromosome 21",y="Density",col="Average\nsequencing depth\n(in silico downsampling)",title = "MDA")
+
+ggsave(filename = paste(fig_dir,"/AllelicImbalance.C6.pdf",sep=""), height = 4, width = 6.1)
+
+
+```
+
+```{r ado}
+
+
+library(ggsci)
+library(ggdist)
+
+  ADO_Invitro <- readRDS(file = paste0(input_dir,"ADO_invitro.rds"))  # threshold 15 reads or more
+ ADO_GM12878 <- readRDS(file = paste0(input_dir,"ADO_GM12878.rds")) %>% # threshold 15 reads or more
+  dplyr::filter(method!="pta")
+ 
+ sc_table <- rbind(ADO_GM12878,ADO_Invitro)
+ 
+   sc_table.mean = sc_table %>% 
+     dplyr::mutate(method=ifelse(nchar(Sample)>3 & method!="mda","Unamplified",method)) %>%
+      dplyr::filter(method!="Unamplified") %>%
+      group_by(Patient) %>% 
+      mutate(ymean = mean(as.numeric(ado))) %>%
+      dplyr::mutate(sd=sd(as.numeric(ado)))
+    
+
+    myadotable <- sc_table %>%
+      dplyr::mutate(method=ifelse(nchar(Sample)>3 & method!="mda" ,"Unamplified",method)) %>%
+      dplyr::filter(method!="Unamplified") %>%
+      dplyr::select(Patient,Sample,ado,method) %>%
+      dplyr::mutate(method=factor(as.factor(method),levels=c("pta","mda"))) %>%
+      dplyr::mutate(ado=as.numeric(ado)) %>%
+      group_by(Patient) %>% 
+      mutate(ymean = mean(ado)) %>%
+      dplyr::mutate(ADO_sub=ado-ymean) %>%
+      dplyr::mutate(Patient=plyr::revalue(Patient, c("NA12878"="NA12878","4295"="ALL01",
+                                                 "417"="ALL02",
+                                                 "445"="ALL03",
+                                                 "4084"="ALL04")))
+    
+    
+    myadotable %>%
+        dplyr::mutate(method=gsub("mda","MDA",gsub("pta","PTA",method))) %>%
+        dplyr::mutate(method=factor(as.factor(method), levels=c("MDA","PTA"))) %>%
+        ggplot(aes(x = method, y = ado, color = method, fill = method)) +
+          scale_color_manual(values = c("red3","dodgerblue3"), guide = "none") +
+          scale_fill_manual(values = c("red3","dodgerblue3"), guide = "none") +
+              geom_point(size=5, alpha=0.5,width = .2, seed = 0) +
+          ylim(0,50) +
+          ggdist::stat_gradientinterval(
+            width = .1, color = "black"
+          ) +
+              coord_flip() +
+              theme_classic() +
+          labs(y="Allelic dropout (ADO)", x="Amplification method")
+              
+    
+    ggsave(filename = paste(fig_dir,"/ADO.15readsthreshold.pdf",sep=""), height = 3, width = 6)
+
+```
+
+
+```{r recall by coverage }
+
+allelic_counts_H1 <- fread("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/Invitro/RESULTS//ADO-H1/H1.chr21.heterozygous.alleliccounts.tsv") %>%
+  dplyr::mutate(protocol="PTA")
+allelic_counts_C6 <- fread("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/RSO/GM12878/RESULTS//ADO-C6/C6.chr21.heterozygous.alleliccounts.tsv") %>%
+  dplyr::mutate(protocol="MDA")
+
+
+allelic_counts_H1 <- fread(paste0(input_dir,"H1.chr21.heterozygous.alleliccounts.tsv")) %>%
+  dplyr::mutate(protocol="PTA")
+allelic_counts_C6 <- fread(paste0(input_dir,"C6.chr21.heterozygous.alleliccounts.tsv")) %>%
+  dplyr::mutate(protocol="MDA")
+
+
+recall_percoverage <- rbind.data.frame(allelic_counts_H1,allelic_counts_C6) %>%
+  dplyr::mutate(FN=ifelse(V6=="N",1,0)) %>%
+  dplyr::group_by(V7,protocol) %>%
+  dplyr::summarize(recall=(n()-sum(FN))/n()) 
+
+recall_percoverage %>%
+    dplyr::mutate(protocol=ifelse(protocol=="MDA", "MDA  NA12878 (C6)\n(Gonzalez-Pena et al., 2020)",ifelse(protocol=="PTA","PTA DLD1 (H1)",protocol))) %>%
+  ggplot(aes(x=V7, y=recall, col=protocol)) +
+  geom_point(size=0.5) +
+  geom_line() +
+  scale_x_continuous(breaks=c(1,5,8,10,15,20,30),
+                     labels = c("1","5","8","10","15","20","30"),
+                     limits = c(1,30)) +
+  theme_bw() +
+  scale_color_manual(values = c("red3","dodgerblue3")) +
+  labs(x="Average sequencing\ncoverage per cell\n(in silico downsampling)",y="Recall", col="") +
+  geom_vline(xintercept = 8, linetype=2) +
+  theme(legend.position = "top")
+
+  ggsave(filename = paste(fig_dir,"/RecallByCoverage.H1C6.pdf",sep=""), height = 4, width = 5)
+
+
+```
+
+
+```{r}
+
+bulk <- fread(paste0(input_dir, "AllelicCountsCoverageHistogram.Invitro_Bulk.chr21.tsv")) %>%
+  dplyr::mutate(sample="Bulk")
+pta <- fread(paste0(input_dir, "AllelicCountsCoverageHistogram.Invitro_H1.30X.chr21.tsv")) %>%
+  dplyr::mutate(sample="pta")
+mda <- fread(paste0(input_dir,"AllelicCountsCoverageHistogram.SCMDA.C6.30X.chr21.tsv")) %>%
+  dplyr::mutate(sample="mda")
+
+
+combined_data <- rbind(bulk,pta, mda)
+colnames(combined_data) <- c("counts","baf","sample")
+
+combined_data %>%
+  dplyr::group_by(sample) %>%
+  dplyr::mutate(total_sites=sum(counts)) %>% 
+  dplyr::ungroup() %>%
+  dplyr::mutate(baf=round(baf,digits = 2)) %>%
+  dplyr::group_by(sample,baf,total_sites) %>%
+  dplyr::summarise(counts=sum(counts)) %>%
+  dplyr::mutate(perc_sites=(counts/total_sites)*100) %>%
+  dplyr::mutate(perc_sites=format(round(perc_sites, 2), nsmall = 4)) %>% 
+  dplyr::mutate(perc_sites=as.numeric(perc_sites)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(sample=factor(as.factor(sample), levels=c("Bulk","pta","mda"))) %>%
+  dplyr::arrange(-baf) %>%
+  dplyr::filter(baf < 0.25) %>%
+  dplyr::mutate(sample=ifelse(sample=="Bulk","Single-cell colony DLD1\n(Póti et al., 2018)",ifelse(sample=="mda", "MDA  NA12878 (C6)\n(Gonzalez-Pena et al., 2020)",ifelse(sample=="pta","PTA DLD1 (H1)",sample)))) %>%
+  dplyr::mutate(sample=factor(as.factor(sample), levels=c("Single-cell colony DLD1\n(Póti et al., 2018)","PTA DLD1 (H1)","MDA  NA12878 (C6)\n(Gonzalez-Pena et al., 2020)"))) %>%
+ ggplot() +
+  geom_col(aes(x=baf,y=as.numeric(perc_sites),fill=sample),position="dodge") +
+  scale_color_manual(values = c("black","dodgerblue3","red3")) +
+  scale_fill_manual(values = c("black","dodgerblue3","red3")) +
+  theme_classic() +
+  labs(x="B-allele frequency at covered\npositions along chromosome 21",y="Percentage of sites",fill="") +
+  theme(legend.position = "bottom")
+  
+  ggsave(filename = paste(fig_dir,"/ErroneousReads.pdf",sep=""), height = 4, width = 5.5)
+
+
+```
+
+

@@ -1,0 +1,343 @@
+---
+title: "Mutation burden and division rate: B-ALL vs healthy B-cells"
+output: html_notebook
+---
+
+This notebook addresses R4.5
+
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(cloneRate)
+library(treeio)
+library(castor)
+
+repo_dir    <- "~/Desktop/BALL_code/"
+source_data <- file.path(repo_dir, "source_data")
+fig_dir     <- file.path(repo_dir, "DNAphy", "figures")
+
+# Patient age at diagnosis (years) — used to estimate mutations per year
+patient_ages <- c("4295" = 15.9, "417" = 17.8, "445" = 4.4, "4084" = 8.6)
+```
+
+---
+
+**How do the number of single-cell mutations in B-ALL compare to mutations acquired by single healthy B-cells (Machado et al. 2022)?**
+
+```{r load-BALL-data}
+NumberMutationsTree <- function(patient) {
+  tree_distance <- readRDS(
+    file = file.path(source_data,
+                     paste0("TreeMutWithZeros.", patient, ".genome.RESCALE.avg.precision.rds"))
+  )
+  tree_distance <- treeio::drop.tip(tree_distance, "zeros")
+
+  dist_root <- castor::get_all_distances_to_root(
+    tree_distance@phylo
+  )[seq_len(length(tree_distance@phylo$tip.label))]
+
+  # Healthy cell labels (confirmed by exome + CNV)
+  healthy_labels <- list(
+    "4295" = c("4295_D9", "4295_C5", "4295_A11"),
+    "417"  = c("417_B10", "417_D9", "417_A2", "417_C5", "417_B5"),
+    "445"  = c("445_A3", "445_E12", "445_G9", "445_D8", "445_H4", "445_F4"),
+    "4084" = character(0)   # no confirmed healthy cells in patient 4084
+  )
+
+  cbind.data.frame(
+    cell_name   = tree_distance@phylo$tip.label,
+    num_mut_root = as.numeric(dist_root),
+    Patient     = patient
+  ) %>%
+    dplyr::mutate(
+      type = ifelse(
+        cell_name %in% healthy_labels[[patient]],
+        "Healthy/Premalignant", "B-ALL"
+      )
+    )
+}
+
+ball_data <- rbind(
+  NumberMutationsTree("4295"),
+  NumberMutationsTree("417"),
+  NumberMutationsTree("445"),
+  NumberMutationsTree("4084")
+) %>%
+  dplyr::mutate(
+    Patient = plyr::revalue(
+      Patient,
+      c("4295" = "Patient A", "417" = "Patient B",
+        "445"  = "Patient C", "4084" = "Patient D")
+    ),
+    source = "This study"
+  )
+
+cat("B-ALL data: n =", nrow(ball_data), "\n")
+cat("  Tumor cells:           ", sum(ball_data$type == "B-ALL"), "\n")
+cat("  Healthy/Premalignant:  ", sum(ball_data$type == "Healthy/Premalignant"), "\n")
+```
+
+```{r load-machado-data}
+machado_url <- paste0(
+  "https://raw.githubusercontent.com/machadoheather/",
+  "lymphocyte_somatic_mutation/main/",
+  "02_mutation_burden_analysis/",
+  "colonyinfo_AX001_KX001_KX002_KX003_TX001_TX002_CB001.txt"
+)
+
+machado_raw <- data.table::fread(machado_url)
+
+# Keep only the B-lymphocyte and HSC compartments; exclude T cells
+# Cell.type2 values: HSC | Naive B | Memory B
+machado_bcells <- machado_raw %>%
+  dplyr::filter(Cell.type2 %in% c("HSC", "Naive B", "Memory B")) %>%
+  dplyr::select(
+    colony, Donor, Cell.type2, Tissue, Age,
+    Nmut, Nmut_adj_as, Nmut_indel, Nmut_adj_as_indel
+  ) %>%
+  dplyr::rename(
+    cell_name    = colony,
+    type         = Cell.type2,
+    num_mut_root = Nmut_adj_as   # use depth-adjusted count
+  ) %>%
+  dplyr::mutate(
+    source  = "Machado et al. 2022",
+    Patient = paste0("Donor ", Donor)
+  )
+
+```
+
+
+B-ALL tumor cells carry substantially more somatic mutations than age-matched
+healthy B-cell precursors because of (a) a greater number of cell divisions and
+(b) potentially elevated mutation rates per division.
+
+```{r mutation-burden-comparison, fig.width=7, fig.height=5}
+
+# Age of each B-ALL patient
+age_lookup <- data.frame(
+  Patient = c("Patient A", "Patient B", "Patient C", "Patient D"),
+  Age     = c(15.9, 17.8, 4.4, 8.6)
+)
+
+# Combine all groups: B-ALL tumour, in-patient healthy/premalignant, and
+# Machado et al. healthy lymphocytes
+comparison_data <- dplyr::bind_rows(
+  # B-ALL tumour cells
+  ball_data %>%
+    dplyr::filter(type == "B-ALL") %>%
+    dplyr::left_join(age_lookup, by = "Patient") %>%
+    dplyr::select(cell_name, num_mut_root, type, source, Patient, Age),
+
+  # Healthy/premalignant cells from the same B-ALL patients
+  ball_data %>%
+    dplyr::filter(type == "Healthy/Premalignant") %>%
+    dplyr::left_join(age_lookup, by = "Patient") %>%
+    dplyr::select(cell_name, num_mut_root, type, source, Patient, Age),
+
+  # Machado B-cells (blood only, for direct comparison)
+  machado_bcells %>%
+    dplyr::filter(Tissue == "blood") %>%
+    dplyr::select(cell_name, num_mut_root, type, source, Patient, Age)
+) %>%
+  dplyr::mutate(
+    group = dplyr::case_when(
+      type == "B-ALL"               ~ "B-ALL",
+      type == "Healthy/Premalignant" ~ "Healthy/Premalignant",
+      type == "Naive B"              ~ "Naive B\n(Machado et al.)",
+      type == "Memory B"             ~ "Memory B\n(Machado et al.)",
+      type == "HSC"                  ~ "HSC\n(Machado et al.)"
+    ),
+    group = factor(group, levels = c(
+      "HSC\n(Machado et al.)", "Naive B\n(Machado et al.)", "Memory B\n(Machado et al.)",
+      "Healthy/Premalignant", "B-ALL"
+    ))
+  )
+
+# Plot
+ggplot(comparison_data, aes(x = group, y = num_mut_root, fill = group)) +
+  geom_violin(alpha = 0.6, scale = "width") +
+  geom_jitter(aes(col = group), width = 0.15, size = 1, alpha = 0.5) +
+  geom_boxplot(width = 0.12, outlier.shape = NA, fill = "white", alpha = 0.7) +
+ # ggpubr::stat_compare_means(
+#    comparisons = list(
+#      c("B-ALL", "Healthy/Premalignant"),
+#      c("B-ALL", "Memory B\n(Machado et al.)"),
+#      c("B-ALL", "Naive B\n(Machado et al.)"),
+#      c("B-ALL", "HSC\n(Machado et al.)")
+#    ),
+#    method = "wilcox.test",
+#    label  = "p.signif"
+#  ) +
+  scale_fill_manual(values  = c("#4DBBD5", "#91D1C2", "#3C5488", "#00A087","#E64B35")) +
+  scale_color_manual(values = c("#4DBBD5", "#91D1C2", "#3C5488", "#00A087","#E64B35")) +
+  theme_classic(base_size = 13) +
+  scale_y_continuous(trans = "log10") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 10)) +
+  labs(
+    x = "",
+    y = "Number of somatic SNVs per cell",
+    title = ""
+  )
+
+ggsave(file.path(fig_dir, "MutationBurden.BALL.vs.Machado.pdf"),
+       width = 8, height = 5)
+
+# Median summary table
+comparison_data %>%
+  dplyr::group_by(group) %>%
+  dplyr::summarise(
+    n      = dplyr::n(),
+    median = median(num_mut_root, na.rm = TRUE),
+    q25    = quantile(num_mut_root, 0.25, na.rm = TRUE),
+    q75    = quantile(num_mut_root, 0.75, na.rm = TRUE)
+  )
+```
+
+To correct for the large age difference between B-ALL patients (children) and
+Machado et al. donors (adults), divide per-cell mutation count by donor age.
+
+```{r mutations-per-year, fig.width=8, fig.height=4}
+
+
+comparison_data %>%
+  dplyr::mutate(
+    muts_per_year = num_mut_root / Age
+  ) %>%
+  dplyr::filter(type!="Memory B") %>%
+ggplot( aes(x = Patient, y = muts_per_year, fill = group)) +
+  geom_violin(alpha = 0.6, scale = "width") +
+  scale_fill_manual(values  = c("#4DBBD5", "#91D1C2",  "#00A087","#E64B35")) +
+ # scale_color_manual(values = c("#4DBBD5", "#91D1C2", "#3C5488", "#00A087","#E64B35")) +
+  theme_classic(base_size = 13) +
+  scale_y_continuous(trans = "log10") +
+  theme(legend.position = "right",axis.text = element_text(angle=90, vjust=0.5),
+        axis.text.x = element_text(size = 10)) +
+  labs(
+    x = "",
+    y = "Mutation rate\n(somatic SNVs per year)",
+    title = ""
+  )
+
+```
+
+---
+
+**How does the cell division rate of B-ALL cells compare to the division rate of healthy HSCs and B-cell precursors?**
+
+
+```{r division-rates, fig.width=6, fig.height=5}
+# Load time-calibrated trees and compute growth rate per patient
+load_rate <- function(patient) {
+  tree_path <- file.path(source_data,
+                         paste0("TreeMut", patient, "_Time_Tree_Null.RDS"))
+  pt <- readRDS(tree_path)
+  pt <- ape::drop.tip(pt, "zeros")
+  pt <- phytools::force.ultrametric(pt)
+
+  # Drop confirmed healthy cells before estimating tumour growth rate
+  healthy_tips <- list(
+    "4295" = c("4295_A11", "4295_D9", "4295_C5"),
+    "417"  = c("417_B10", "417_B5", "417_C5", "417_D9", "417_A2"),
+    "445"  = c("445_A3",  "445_E12", "445_G9",
+               "445_D8",  "445_H4",  "445_F4"),
+    "4084" = character(0)
+  )
+  tumor_tree <- ape::drop.tip(pt, c(healthy_tips[[patient]], "zeros"))
+  tumor_tree <- phytools::force.ultrametric(tumor_tree)
+
+  ml  <- cloneRate::maxLikelihood(tumor_tree)
+  il  <- cloneRate::internalLengths(tumor_tree)
+
+  data.frame(
+    Patient     = patient,
+    method_ml   = ml$estimate,
+    lower_ml    = ml$lowerBound,
+    upper_ml    = ml$upperBound,
+    method_il   = il$estimate,
+    lower_il    = il$lowerBound,
+    upper_il    = il$upperBound,
+    clone_age   = ml$cloneAgeEstimate
+  )
+}
+
+ball_rates <- rbind(
+  load_rate("4295"),
+  load_rate("417"),
+  load_rate("445"),
+  load_rate("4084")
+) %>%
+  dplyr::mutate(
+    Patient = plyr::revalue(
+      Patient,
+      c("4295" = "Patient A", "417" = "Patient B",
+        "445"  = "Patient C", "4084" = "Patient D")
+    )
+  )
+
+
+
+ball_rates_long <- ball_rates %>%
+  tidyr::pivot_longer(cols = c(method_ml, lower_ml, upper_ml,
+                               method_il, lower_il, upper_il)) %>%
+  dplyr::mutate(method_type = ifelse(grepl("ml", name), "Maximum likelihood (cloneRate)", "Internal length (cloneRate)")) %>%
+  dplyr::mutate(name = gsub("_.*", "", name)) %>%
+  tidyr::pivot_wider(names_from = name, values_from = value)
+
+clone_trees <- cloneRate::realCloneData$cloneTrees   # ~42 expanded clones, n>=10 tips each
+full_trees  <- cloneRate::realCloneData$fullTrees    # ~30 full reconstructions
+healthy_clone_rates <- lapply(seq_along(clone_trees), function(i) {
+  tr <- phytools::force.ultrametric(clone_trees[[i]])  # skip if already ultrametric
+  ml <- cloneRate::maxLikelihood(tr)
+  il <- cloneRate::internalLengths(tr)
+  data.frame(clone = names(clone_trees)[i], n_tips = ape::Ntip(tr),
+             method_ml = ml$estimate, lower_ml = ml$lowerBound, upper_ml = ml$upperBound,
+             method_il = il$estimate, lower_il = il$lowerBound, upper_il = il$upperBound)
+}) %>% dplyr::bind_rows() %>% dplyr::mutate(source = "Benign/CH clones (cloneRate)")
+healthy_rates_long <- healthy_clone_rates %>%
+  tidyr::pivot_longer(cols = c(method_ml, lower_ml, upper_ml,
+                               method_il, lower_il, upper_il)) %>%
+  dplyr::mutate(method_type = ifelse(grepl("ml", name), "Maximum likelihood (cloneRate)", "Internal length (cloneRate)")) %>%
+  dplyr::mutate(name = gsub("_.*", "", name)) %>%
+  tidyr::pivot_wider(names_from = name, values_from = value)
+
+
+
+full_join(ball_rates_long %>% dplyr::mutate(dataset="B-ALL"),
+                 healthy_rates_long %>% dplyr::mutate(dataset="Healthy/CH clones") %>% dplyr::rename(Patient=clone)) %>%
+      dplyr::mutate(dataset=factor(dataset, levels=c("Healthy/CH clones","B-ALL"))) %>%
+ggplot() +
+  geom_pointrange(
+    aes(x = Patient, y = method, ymin = lower, ymax = upper, col=dataset),
+    size = 0.8, shape = 18
+  ) +
+  scale_color_manual(values = c("#91D1C2","#E64B35")) +
+    facet_grid(method_type ~ dataset, scales = "free_x", space = "free_x") +
+
+  theme_classic(base_size = 13) +
+  theme(legend.position = "none", strip.background = element_blank(),
+        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) +
+  labs(
+    x        = "",
+    y        = "Net growth rate r (per year)",
+    fill     = "",
+    color    = "",
+    linetype = "Healthy reference",
+    title    = ""
+  )  +
+  scale_y_continuous(transform = "log10")
+
+
+ggsave(file.path(fig_dir, "DivisionRate.BALL.vs.HealthyOrCH.pdf"),
+       width = 7, height = 5)
+
+print(ball_rates)
+```
+
+

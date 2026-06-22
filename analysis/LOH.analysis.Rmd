@@ -1,0 +1,612 @@
+---
+title: "High-resolution CNV tree mapping"
+output: html_notebook
+---
+
+# Characterize regions with allelic imbalance
+```{r}
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggtree)
+
+ patient <- "Invitro"
+ patient <- "4295"
+ #patient <- "417"
+ #patient <- "445"
+ #patient <- "4084"
+
+
+ input_dir="../source_data/"
+fig_dir="../figures/"
+ 
+
+ interval <- 15000
+ sliding <- "4" #
+ switch <- "1" # 0 
+
+
+ # CNV allele specific
+ #loh_as <- fread(paste0(main_dir,"/BAF_",interval,"_sliding",sliding,
+#                        "_switch",switch,
+#                        "/CNVs_allele_specific.tsv"))
+ loh_as <- fread(paste0(input_dir,"/CNVs_allele_specific.",patient,".tsv"))
+ colnames(loh_as) <- gsub("_hg38","",colnames(loh_as))
+ loh <- loh_as
+
+# Remove coordinates 
+
+chrpos <- loh[,c("CHR","POS")] %>%
+  dplyr::mutate(END=lead(POS, default = as.numeric(tail(loh$POS,1))+(interval*1000))) %>%
+  dplyr::mutate(CHANGE=lead(CHR, default = tail(loh$CHR,1))) %>%
+  dplyr::mutate(CHANGE=ifelse(CHR!=CHANGE,"diff","same")) %>%
+  dplyr::mutate(END=ifelse(CHANGE=="diff",POS+(interval*1000),END)) %>%
+  dplyr::mutate(END=format(END, drop0trailing = TRUE, scientific = FALSE)) %>% # transform scientific notation into numeric 
+  dplyr::mutate(POS=as.numeric(POS)+1) %>% # it can be 0-based
+  dplyr::mutate(END=as.numeric(END)) %>%
+  dplyr::mutate(position=paste(paste0("chr",CHR),":",POS,"-",END,sep="")) %>%
+  dplyr::select(position) %>%
+  unlist()
+
+loh_samples <- loh[,-c("CHR","POS")]
+dim(loh_samples)
+loh_samples <- do.call("cbind",lapply(loh_samples,as.numeric))
+rownames(loh_samples) <- chrpos
+dim(loh_samples)
+loh_samples[1:3,1:4]
+
+####################################
+# Remove samples with too high MAD #
+####################################
+
+SingleCheck <- fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=430520836&single=true&output=csv")
+
+cell_to_remove <- SingleCheck %>%
+  dplyr::filter(Patient==patient ) %>%
+  dplyr::filter(`Analysis depth`<=0.1) %>%
+  dplyr::select(Project,Patient,Sample,`MAD`,`Amplification`,`Notes`) %>%
+  dplyr::filter(MAD>=0.3) %>%
+  dplyr::filter(grepl(patient,Sample)) %>%
+  dplyr::mutate(cell=Sample) %>%
+  dplyr::select(cell) %>% unlist() %>% as.vector()
+
+
+# Remove cells with high ADO 
+
+ADO <- readRDS(file = paste0(input_dir, "/ADO.",patient,".rds"))
+
+cell_to_remove2 <- ADO %>%
+  dplyr::filter(as.numeric(ado)>10) %>%
+  dplyr::mutate(cell=gsub(" $","",paste0(Patient, "_" ,Sample))) %>%
+  dplyr::select(cell) %>% unlist() %>% as.vector()
+
+cell_to_remove <- c(cell_to_remove, cell_to_remove2)
+loh_samples <- loh_samples[,which(!(colnames(loh_samples) %in% cell_to_remove))]
+
+
+
+
+# Create tables 
+
+loh_samples_numbers <- loh_samples 
+# Create an input without allele specific  
+loh_samples2 <- loh_samples 
+# Create an input without allele specific  
+loh_samples2[loh_samples2 == 1] <- 1
+loh_samples2[loh_samples2 == 0] <- 1
+loh_samples2[loh_samples2 == 0.5] <- 0
+non_allele_specific<- loh_samples2
+
+# Create input for bed file
+loh_samples3 <- loh_samples # Create input for bed
+loh_samples3[loh_samples == 1] <- 1
+loh_samples3[loh_samples == 0] <- 1
+loh_samples3[loh_samples == 0.5] <- 0
+
+```
+
+
+# Create a bed file to remove SNVs within
+
+<!-- NOTE: This BED file (AllelicImbalance.<interval>.<patient>.bed) is used by src/Cellphy.PTA.sh
+     to annotate SNVs with allelic imbalance status (via bcftools annotate) and filter out
+     variants in CNV regions before phylogenetic analysis with CellPhy.
+     Run this chunk manually (eval=F) and save the output before running Cellphy.PTA.sh. -->
+
+```{r, eval=F}
+
+intervals <- chrpos %>% as.vector() %>%
+  as.data.frame() %>%
+  cbind.data.frame(rowSums(loh_samples3, na.rm = T) %>% as.data.frame() %>% dplyr::rename(cnv=".") %>%
+  dplyr::mutate(allelicimbalance=ifelse(cnv>2,"AI3ormorecells","diploid"))) %>%
+  dplyr::mutate(allelicimbalance=ifelse(cnv==2,"diploidAI2cells",allelicimbalance)) %>%
+  dplyr::mutate(allelicimbalance=ifelse(cnv==1,"diploidAI1cell",allelicimbalance)) %>%
+  dplyr::rename(position=".") %>%
+  tidyr::separate(position, into=c("chrom","start","end"), sep="[:-]", convert=T) %>%
+  dplyr::select(-cnv)
+
+
+#intervals %>%
+#  data.table::fwrite(file = paste0("AllelicImbalance.",interval,".",patient,".bed"),
+#              quote = F, row.names = F, sep = "\t")
+
+```
+
+# Plot states next to the phylogeny
+
+```{r}
+
+if (patient=="4295"){
+  outgroup="4295_A11"
+} else if (patient=="417"){
+  outgroup <- "417_B10"
+} else if (patient=="4084"){
+  outgroup="4084_F1"
+} else if (patient=="445") {
+  outgroup="445_A3"
+} else if (patient=="Invitro"){
+  outgroup="Invitro_Bulk"
+} else {
+  outgroup=""
+}
+
+# Build the tree to plot
+  
+      loh_samples <- loh_samples[which(rowSums(loh_samples2, na.rm = T)>=2),]
+      mytreemapped<- readRDS(paste0(input_dir,"TreeMutWithZeros.",patient,".genome.exomemapped.rds", sep=""))
+      mytreemapped <- treeio::drop.tip(mytreemapped, tip = "zeros")
+      mytree <- mytreemapped@phylo
+      mytree <- ape::drop.tip(mytree, tip = cell_to_remove)
+      
+    
+
+       # reroot the tree using a healthy cell
+      mytree <- ape::root(phy = mytree,outgroup)
+
+      tree2plot <- finaltree <- mytree
+    
+      # For the true tree I cannot add support
+      treefigure <- ggtree(tree2plot, branch.length = "none") + 
+                       theme_tree() +
+                       geom_rootedge() +
+                       geom_tiplab(size=2, hjust = - 0.05, fontface = "bold") +
+                       coord_cartesian(clip = 'off') +
+                       labs(col="Exome clusters") +
+                       scale_x_continuous(breaks=c(25000,50000,75000,100000,125000),
+                                          labels=scales::comma_format(c(25000,50000,75000,100000,125000),
+                                                                      trim = FALSE)) +
+    
+        labs(x="") #+
+
+
+
+  # modify allele specific 
+  loh_samples[loh_samples == 1] <- "B"
+  loh_samples[loh_samples == 0] <- "A"
+  loh_samples[loh_samples == 0.5] <- "A|B"
+  CNV_spec <- loh_samples
+  dim(loh_samples)
+
+  
+  #colnames(CNV_spec) <- gsub(paste0(patient,"_"),"",colnames(CNV_spec))
+  # Calculate consistency index and select congruent positions
+  alignment <- phangorn::as.phyDat(t(CNV_spec)[tree2plot$tip.label,], type="USER", levels = c("A|B","A","B"), ambiguity=c(NA))
+  RIs <- phangorn::RI(tree=tree2plot, data = alignment, sitewise = T)
+
+  # Select only the congruent positions
+  CNV_spec <- CNV_spec[which(RIs>0.8),]
+  dim(CNV_spec)
+
+  #CNV_spec <- na.omit(CNV_spec)
+  dim(CNV_spec)
+
+  CNV_spec2 <- CNV_spec
+  CNV_spec2[CNV_spec2 == "B"] <- 1
+  CNV_spec2[CNV_spec2 == "A"] <- 1
+  CNV_spec2[CNV_spec2 == "A|B"] <- 0
+
+  # Sort columns
+  #ordercols <- hclust(dist(CNV_spec2))
+  
+  
+  #gheatmap(treefigure + theme_tree(legend.position="none"), t(CNV_spec[ordercols$order,]),
+  gheatmap(treefigure + theme_tree(legend.position="none"), t(CNV_spec),
+               offset=5, # distance from tips to the matrix . 0.5 for branche.length=none"
+               width=8, # default 1
+               colnames_angle=90, 
+               hjust = 0, # centering colnames
+               colnames_offset_y = -4,
+               colnames_position = "bottom",
+               font.size = 0.4, # matrix colnames
+               color=NULL, # color of cell border
+               legend_title="",
+               colnames=T
+      ) +
+        #scale_fill_manual(values=mycolors, na.value = "white",na.translate = F, limits=intersect(paste0("chr",1:22),levels(as.factor(chrom)))) +
+        scale_fill_manual(values=c("red3","white","dodgerblue3"), na.value = "lightgrey")+
+        labs(fill="",col="", title = "") +
+        theme(legend.position = "right")
+
+  ggsave(paste(fig_dir,"CNV.",patient,".pdf",sep=""), 
+           width = 15, height = 9)
+ 
+
+```
+
+
+
+# Filter consecutive and by band
+
+```{r}
+
+    library(fuzzyjoin)
+    library(dplyr)
+    
+
+    # Here we are not filtering anymore by mutations present in at least x cells
+    loh_samples4 <- loh_samples3
+    dim(loh_samples4)
+    # Remove patient name
+    #colnames(loh_samples4) <- gsub(".*_","",colnames(loh_samples4))
+    # select samples in tree order and translocate the matrix 
+    #loh_matrix_plot <- t(loh_samples4[,tree2plot$tip.label])
+    loh_matrix_plot <- t(loh_samples4[,tree2plot$tip.label])
+    dim(loh_matrix_plot)
+    loh_matrix_plot[1:3,1:5]
+    
+    loh_matrix_plot_congr <- loh_matrix_plot
+         
+    # Create a table with interval names 
+    index <- 1:length(colnames(loh_matrix_plot_congr))
+    chrom <- gsub(":.*","",colnames(loh_matrix_plot_congr))
+    start <- gsub("-.*","",gsub(".*:","",colnames(loh_matrix_plot_congr)))
+    end <- as.numeric(gsub(".*-","",gsub(".*:","",colnames(loh_matrix_plot_congr))))
+    region_annotated <- cbind.data.frame(index,chrom,start,end) 
+    
+    kept_lines <- region_annotated %>%
+      dplyr::select(chrom,start,end) %>%
+      cbind.data.frame(t(loh_matrix_plot_congr)) %>%
+      dplyr::mutate(start=as.numeric(start)-1)
+    
+    # Calculate number of cell with AI detected
+    ai_detected <- kept_lines %>%
+      dplyr::select(-chrom,-start,-end) %>% 
+      rowSums(na.rm = TRUE)
+    
+    ###################################
+    # added Nov 15 23: avoid for PATH #
+    ###################################
+    kept_lines <- region_annotated %>%
+      dplyr::select(chrom,start,end) %>%
+      cbind.data.frame(loh_samples_numbers) %>%
+      dplyr::mutate(start=as.numeric(start)-1)
+     pres_abs <- kept_lines %>%
+      dplyr::select(-chrom,-start,-end) %>% 
+      as.matrix() %>%
+      -0.5 %>% abs() 
+    pres_abs[pres_abs >0] <- 1
+    ai_detected <- pres_abs %>%
+      rowSums(na.rm = TRUE)
+
+    ## Download cytoband table from http://genome.ucsc.edu/cgi-bin/hgTables
+    ## clade = mammal, genome = human, assembly = hg38 (or other), group = Mapping and Sequencing, track = Chromosome Band, table = cytoBand, output format = all fields from selected table, file type returned = plain text
+    cytoband_hg38 <- fread(paste0(input_dir,"CytogeneticBands.hg38.Nov142022.ucsc.txt"), sep = "\t", header = T) %>%
+                               dplyr::rename(start=chromStart) %>%
+                               dplyr::rename(end=chromEnd) 
+    
+    
+###############################################################
+# Filter by consecutive windows and num of cells carrying the imbalance # ###############################################################
+    
+    min_times_region_consecutive <- 1  # 4*25kb=100kb
+    # The events present in a number of cells like the one below or smaller will be discarded  
+    n_cells <- 2
+    
+regions_AI_filt <- cbind.data.frame(
+  kept_lines,ai_detected) %>%
+  # add giemsa info
+  fuzzyjoin::genome_join(cytoband_hg38, by = c("chrom","start", "end"), mode = "left") %>%
+  dplyr::rename(chrom=chrom.x,start=start.x,end=end.x) %>%
+  # select events occurring at least in two cells
+  dplyr::filter(ai_detected>n_cells) %>%
+  # a single interval might be overlapping two giemsa bands (so there will be two entries instead of one)
+  # At the end I decided to keep only one of them
+  #   dplyr::filter(!(chrom==lag(chrom, default = "") & start==lag(start))) %>%
+  dplyr::mutate(filt=ifelse(!(chrom==lag(chrom, default = NA) & start==lag(start) & end==lag(end)),"keep","remove")) %>%
+  dplyr::mutate(filt=ifelse(lag(filt)=="keep","keep",filt)) %>%
+    dplyr::filter(filt=="keep") %>% 
+      dplyr::mutate(span_kb=((end-start)/1000)) %>%
+      dplyr::select(-chrom.y,-start.y,-end.y,-filt) %>%
+      # give an identifier to each region
+      tibble::rowid_to_column("ID") %>%
+      # Select only regions of at least 2 consecutive 
+      dplyr::mutate(span_next=ifelse(chrom==lead(chrom) & lead(name)==name, (as.numeric(lead(start))-as.numeric(end))/1000,12345678)) %>%
+      #dplyr::mutate(filt=if_else(span_kb >= interval*4 | span_next<=interval*2,"keep","remove"))
+      dplyr::mutate(filt=if_else(span_next==0,"keep","remove")) %>%
+  dplyr::mutate(filt=ifelse(lag(filt)=="keep","keep",filt)) %>%
+  dplyr::group_by(name,filt) %>%
+  dplyr::mutate(span_kb_region=sum(span_kb)) %>%
+  dplyr::mutate(filt=ifelse(span_kb_region<=(interval/1000*min_times_region_consecutive),"remove",filt))
+                    
+                    
+    # Annotate consecutive intervals with the same name
+    Combined_table <- fuzzyjoin::genome_join(kept_lines, regions_AI_filt, by = c("chrom","start", "end"), mode = "right") %>%
+      dplyr::group_by(ID) %>% 
+      #dplyr::select(name,matches("[A-Z][0-9]+"),filt)
+      dplyr::select(ID,matches("[A-Z][0-9]+"),filt)
+
+
+        # Calculate mean of consecutive windows
+    CNV_value <-  aggregate(x = Combined_table[,-ncol(Combined_table)], list(Combined_table$ID), mean) %>%
+    dplyr::select(-Group.1, -ID)
+
+           # Create a matrix with mean value per collapsed interval for PATH
+    FilteredTable <- cbind.data.frame(regions_AI_filt, CNV_value) %>%
+      dplyr::filter(filt!="remove")
+    
+    #FilteredTable %>%
+    #  write.table(paste0(input_dir,"/BAF_",interval,"/CNVs.collapsedtp.tsv"))
+
+    
+    ######################################
+    # Collapse result by chromosome band #
+    ######################################
+    
+    FilteredTableGiemsa <- FilteredTable %>%
+      dplyr::group_by(chrom,name,gieStain) %>%
+      dplyr::mutate(start_band=min(start)) %>%
+      dplyr::mutate(end_band=max(end)) %>%
+      dplyr::group_by(chrom,name,start_band,end_band,gieStain) %>%
+      summarise(across(matches("[A-Z][0-9]+"), list(mean))) %>%
+      arrange(chrom,start_band,end_band) %>%
+      dplyr::ungroup() #%>%
+      
+
+      #FilteredTableGiemsa %>%
+      #  write.table(paste0(input_dir,"/BAF_",interval,"/CNVs.collapsedbycytogeneticbandtp.tsv"))
+    
+    
+    
+    ##############################################
+    # Correct switches in consecutive intervals  #
+    ##############################################
+        # nov 15. 
+    Combined_table <- fuzzyjoin::genome_join(kept_lines, regions_AI_filt[,!grepl("_",colnames(regions_AI_filt))], by = c("chrom","start", "end"), mode = "right") %>%
+      dplyr::ungroup() %>% dplyr::rowwise() %>%
+      dplyr::mutate(band=paste0(as.character(chrom.y),".",as.character(name))) %>%
+      dplyr::group_by(ID) %>% 
+      dplyr::select(ID,matches("[A-Z][0-9]+"),filt,band)
+    
+    
+    # remove the intervals removed previously
+    Combined_table <- Combined_table %>%
+      dplyr::filter(filt=="keep") %>%
+      dplyr::select(-filt)
+    
+    # Remove lines which are all NAs for the cells
+    Combined_table <- Combined_table[rowSums(is.na(Combined_table[,-c(1,ncol(Combined_table),ncol(Combined_table)-1)])) != ncol(Combined_table)-3, ]
+      
+    
+   Combined_table_a <- Combined_table %>%
+      dplyr::ungroup() %>%
+      tibble::rowid_to_column("site") %>%
+      tidyr::pivot_longer(cols=colnames(Combined_table)[!grepl("(ID|band)",colnames(Combined_table))], names_to="sample",values_to="VAF") %>%
+      dplyr::group_by(ID,sample) %>%
+      dplyr::mutate(newvaf=median(VAF, na.rm = T)) %>%
+      arrange(sample,ID) %>%
+      #dplyr::mutate(VAF=newvaf) %>%
+      dplyr::select(-newvaf) %>%
+      tidyr::pivot_wider(names_from = sample,values_from=VAF)
+    
+    
+   mymatrix <- t(Combined_table_a[,-c(1,2,3)])
+   colnames(mymatrix) <- paste0(Combined_table_a$band,"_",Combined_table_a$site)
+    
+      tree2plot_rightnames <- finaltree 
+      tree2plot_rightnames$tip.label <- gsub("417_","B_",gsub("4084","D_",gsub("445_","C_",gsub("4295_","A_",tree2plot_rightnames$tip.label))))
+      rownames(mymatrix) <- gsub("417_","B_",gsub("4084","D_",gsub("445_","C_",gsub("4295_","A_",rownames(mymatrix)))))
+      treefigure2 <- ggtree(tree2plot_rightnames, branch.length = "none") + 
+                       theme_tree() +
+                       geom_rootedge() +
+                       geom_tiplab(size=2, hjust = - 0.05, fontface = "bold") +
+                       coord_cartesian(clip = 'off') +
+                       labs(col="Exome clusters") +
+                       scale_x_continuous(breaks=c(25000,50000,75000,100000,125000),
+                                          labels=scales::comma_format(c(25000,50000,75000,100000,125000),
+                                                                      trim = FALSE)) +
+    
+        labs(x="") #+
+   
+   
+   if (patient == "4295"){
+
+      pdf(file = paste(fig_dir,"MappingCNVs.",patient,".pdf",sep=""), width = 15, height = 6)
+      gheatmap(treefigure2 , mymatrix,
+               offset=3, # distance from tips to the matrix . 0.5 for branche.length=none"
+               width=5, # default 1
+               colnames_angle=90, 
+               hjust = 0, # centering colnames
+               colnames_offset_y = -4,
+               colnames_position = "bottom",
+               font.size = 0.2, # matrix colnames
+               color=NULL, # color of cell border
+               legend_title="",
+               colnames=T
+      ) +
+        scale_fill_gradientn(colours = c("darkred", "sandybrown","lightyellow","lightblue","dodgerblue"), na.value = "lightgrey") +
+        #scale_fill_distiller(palette = "Spectral") +
+        labs(fill="",col="", title = "") +
+        theme(legend.position = "right")
+    dev.off()
+     
+          
+   } else {
+     
+    pdf(file = paste(fig_dir,"MappingCNVs.",patient,".pdf",sep=""), width = 8, height = 5)
+      gheatmap(treefigure2 , mymatrix,
+               offset=4, # distance from tips to the matrix . 0.5 for branche.length=none"
+               width=5, # default 1
+               colnames_angle=90, 
+               hjust = 0, # centering colnames
+               colnames_offset_y = -0.5,
+               colnames_position = "bottom",
+               font.size = 0.2, # matrix colnames
+               color=NULL, # color of cell border
+               legend_title="",
+               colnames=T
+      ) +
+        scale_fill_gradientn(colours = c("darkred", "sandybrown","lightyellow","lightblue","dodgerblue"), na.value = "lightgrey") +
+        #scale_fill_distiller(palette = "Spectral") +
+        labs(fill="",col="", title = "") +
+        theme(legend.position = "right")
+    dev.off()
+     
+   }
+  
+
+```
+
+
+# Quantify number of SNVs within AI regions
+
+```{r, eval=F}
+
+
+ #bcftools query -f '%allelicimbalance\n' #${WORKDIR}/isec_somatic-germline/FILTERED/VariantSitesForPhylogeny.hg38_multianno.nobulks.AI.vcf | sort | uniq -c
+
+  # 35 . (chromosome Y)
+  # 6485 AI3ormorecells
+  #32184 diploid
+  #14327 diploidAI1cell
+  # 8740 diploidAI2cells
+
+   categories <- c("AI in 3 or more cells","No AI","AI in 1 cell","AI in 2 cells")
+   class <- c("filtered","kept","kept","kept")
+   counts <- c(6485,32184,14327,8740)
+   
+   cbind(categories,counts,class) %>%
+     as.data.frame() %>%
+     ggplot(aes(x=categories,y=as.numeric(counts), fill=class)) +
+     geom_col() +
+     labs(x="Present in an interval in which there is",y="SNV") +
+     scale_fill_brewer(palette = "Set2", direction = -1) +
+     theme_light()
+     
+
+```
+
+
+
+# Compare phylogeny without CNVs and with CNVs
+
+```{r, eval=F}
+
+library(dplyr)
+library(tidyr)
+library(ape)
+library(tidytree)
+library(ggtree)
+library(ggplot2)
+library(RColorBrewer)
+
+  if (patient=="4295"){
+    outgroup="A11"
+  } else if (patient=="417"){
+    outgroup <- "B10"
+  } else if (patient=="4084"){
+    outgroup="F1"
+  } else if (patient=="445") {
+    outgroup="A3"
+  } else {
+    outgroup=""
+  }
+  
+  #outgroup <- "C5"
+  
+   mytree <- read.tree(paste("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/WGS/",patient,"/RESULTS/CellPhy-02/CellPhy.GT10+FO+E.nobulks.noCNVs.raxml.bestTree",sep="")) 
+  mytreeCNV <- read.tree(paste("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/WGS/",patient,"/RESULTS/CellPhy-02/CellPhy.GT10+FO+E.nobulks.raxml.bestTree",sep="")) 
+
+  
+  # BEAST tree  
+  
+  
+  # Tree with PLs
+  #mytree <- ape::read.tree(paste("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/WGS/",patient,"/RESULTS/CellPhy-02/CellPhy.GT10+FO+E.nobulks.noCNVs.raxml.support",sep=""))
+  #mytreeCNV <- ape::read.tree(paste("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/WGS/",patient,"/RESULTS/CellPhy-02/CellPhy.GT10+FO+E.nobulks.raxml.support",sep=""))
+  
+  
+  statuses <-Quartet::QuartetStatus(mytree, mytreeCNV)
+  # In this case most of the metrics are the same because normalization does not make a difference, the trees are completely solved
+  AllDistances <- Quartet::SimilarityMetrics(statuses, similarity = T)
+  # Percentage of quartets which are the same
+  similarity <- as.numeric(AllDistances[1,"QuartetDivergence"]*100)
+  similarity
+  
+  
+  ## Tree with PLs and mutations annotated. Ideally, I would need to add bootstrap support to the same tree
+  #tree <- read.mtree(paste("/gpfs/commons/groups/landau_lab/tprieto/BioSkryb/data/WGS/",patient,"/RESULTS/CellPhy-02/CellPhy.GT10+FO+E.Mapped.raxml.mutationMapTree",sep=""))
+  #mytree <- tree@phylo
+    
+     mytree$tip.label <- gsub(".*_","",mytree$tip.label)
+     mytree <- ape::root(mytree, outgroup)
+    ## Make ultrametric
+    #mytree=ape::chronos(mytree, lambda=0)
+    #ape::write.tree(mytree, 'my_ultra.tre')
+    #mytree <- ape::read.tree('my_ultra.tre')
+    #unlink('my_ultra.tre')
+    #class(mytree)
+    
+     # Validation of exome using healthy cells
+    groupInfo <- fread("https://docs.google.com/spreadsheets/d/e/2PACX-1vR91fISOmmJc4WDAsnx9LOXd80YirilNxPSoFBktYrMTWh8fjQpczb3tFH3QXrY30dMeSVD9_mlP4YB/pub?gid=0&single=true&output=csv") %>%
+      dplyr::select(Patient,Sample_tag,`Other info`) %>%
+      dplyr::filter(`Other info`=="Healthy" | `Other info`=="Almost healthy") %>%
+      dplyr::filter(Patient==patient) %>%
+      dplyr::rename(Healthy=Sample_tag) %>%
+      dplyr::select(Healthy) %>%
+      as.list()
+    
+    
+     # Some cell names are not in the plot
+     unassigned <- list(setdiff(mytree$tip.label,c(unlist(groupInfo))))
+     groupInfo[length(groupInfo)+1] <- unassigned
+     names(groupInfo) <- c(names(groupInfo)[1:(length(groupInfo)-1)],"unassigned")
+     finaltree <- groupOTU(mytree, groupInfo)
+    
+     
+     #finaltree$node.label <- as.numeric(finaltree$node.label)
+     # Only show bootstrap higher than 50
+     #finaltree$node.label[finaltree$node.label<bootstrap_threshold] <- NA
+      
+     # Colors for groupInfo for clusters
+      mycols <- brewer.pal(length(groupInfo), "Dark2")
+      mycols_mod <- mycols[c(1,2,3,4,5,7,8,9,10)]
+      mycols_mod <- c(mycols_mod,"lightgrey")
+      
+      # Colors for healthy tumor (1 and 3)
+      # Second color works for the bootstrap annotations
+      mycols_mod <- c("lightskyblue","forestgreen","maroon4")
+
+      
+      
+     
+      treefigure <- ggplot(castor::date_tree_red(finaltree, anchor_node = NULL, anchor_age = 4)$tree, aes(x,y)) + #, branch.length="none") +
+      #treefigure <- ggplot(finaltree, aes(x,y)) + #, branch.length="none") +
+                       geom_tree() + 
+                       theme_tree() +
+                       geom_rootedge(0.01) +
+                       #geom_nodelab(mapping = aes(col="red"),size=2, hjust = 1.3, vjust=1.3) +
+                       scale_color_manual(values = mycols_mod) +
+                       coord_cartesian(clip = 'off') +
+                       labs(col="Exome clusters") +
+                       theme(legend.position = "none")
+    
+
+    treefigure  
+      
+
+```
+
+
+
