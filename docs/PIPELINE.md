@@ -82,7 +82,7 @@ export PATH="$PWD/src:$PATH"
 
 | # | Step | Script |
 |---|------|--------|
-| 28 | CellPhy ML tree (GT10+FO+E, 100 bootstraps) | `src/Cellphy.PTA.sh` (resolveOME: `src/Cellphy.RSO.sh`) |
+| 28 | CellPhy ML tree (GT10+FO+E, 100 bootstraps) | `src/Cellphy.PTA.sh` |
 | 29 | Map mutations to tree (CellPhy/treemut) | `src/Cellphy.mutationmapping.PTA.sh` |
 | 30 | Rescue filtered-out Mutect2 variants by tree congruence (in vitro only) | `src/PreMutationMapping.PTA.sh` |
 | 31 | Mutation mapping (treemut) | `src/MutationMapping.PTA.sh` → `src/R/MutationMappingCellPhyTreeMut.R`, `src/R/Treemut.R` |
