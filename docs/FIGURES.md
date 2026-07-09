@@ -48,7 +48,7 @@ Figures 4, 5, S5, S6 (and optional Figure CNVs).
 
 **¹ Fig 4F — mirrored BAF input.** Run `src/generate_chr13_mirrored_baf.py` on the cluster first to produce `region_1_chr13_5k_imbalance.csv` from `dict_chr13.pkl` in `RESULTS/BAF/BAF_5000/`. The CSV covers chr13:40,000,000–43,000,000 in 5 kb windows; the notebook plots the sub-region 41,400,000–42,900,000.
 
-**² Fig 5H — clonal fitness.** Reproduced from https://github.com/jzinno/scABC (JAK2-mutant clone fitness analysis, patient A). Not in this repo.
+**² Fig 5H — clonal fitness.** `analysis/ABC` (JAK2-mutant clone fitness analysis, patient A)
 
 **³ Fig 5I — phylodynamics.** `src/PlotTrees.R` reads pre-computed ultrametric RDS files from `src/ForPathCreateUltrametric.PTA.sh`. Cluster paths:
 - `timetrees/TreeMut4295_Time_Tree_Null.RDS`
