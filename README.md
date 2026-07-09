@@ -34,11 +34,9 @@ This repository holds the analysis pipeline and the code that reproduces manuscr
 
 
 4. **Copy Number Variation Analysis** — Shapeit phasing → Chisel allele counts → BAF →
-   LOH classification with haplotype-switch minimization. → `docs/PIPELINE.md` D.
+   LOH classification. → `docs/PIPELINE.md` D.
 
-5. **In Vitro Evolution Validation** — the DLD-1 clonal-evolution experiment
-   (`Invitro` sample set).
-   → `docs/PIPELINE.md`.
+5. **In Vitro Evolution Validation** — the DLD-1 clonal-evolution experiment. → `docs/FIGURES.md`
 
 ---
 
